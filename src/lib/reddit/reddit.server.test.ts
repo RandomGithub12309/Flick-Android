@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { exchangeCode, refreshGrant } from "./reddit.server.ts";
+import { exchangeCode, fetchSavedPage, refreshGrant } from "./reddit.server.ts";
 
 /**
  * Flick is a Reddit **installed app**: a public client issued with no client
@@ -142,6 +142,69 @@ describe("reddit token exchange — installed app contract", () => {
     const me = calls.find((c) => c.url.includes("/api/v1/me"))!;
     const headers = me.init.headers as Record<string, string>;
     assert.equal(headers.Authorization, "Bearer at");
+  });
+});
+
+describe("Redgifs video resolution", () => {
+  it("prefers the audio-bearing Redgifs MP4 over Reddit's silent transcode", async () => {
+    stub([
+      [
+        /\/user\/someone\/saved/,
+        () =>
+          tokenResponse({
+            data: {
+              after: null,
+              children: [
+                {
+                  kind: "t3",
+                  data: {
+                    id: "post",
+                    name: "t3_post",
+                    title: "A Redgifs clip",
+                    subreddit: "videos",
+                    author: "someone",
+                    permalink: "/r/videos/comments/post",
+                    url_overridden_by_dest: "https://www.redgifs.com/watch/SomeGif",
+                    domain: "redgifs.com",
+                    crosspost_parent_list: [
+                      {
+                        url_overridden_by_dest: "https://v.redd.it/clip",
+                        domain: "v.redd.it",
+                        secure_media: {
+                          reddit_video: {
+                            fallback_url: "https://v.redd.it/clip/DASH_720.mp4",
+                            width: 720,
+                            height: 1280,
+                            has_audio: false,
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          }),
+      ],
+      [/\/v2\/auth\/temporary/, () => tokenResponse({ token: "redgifs-token" })],
+      [
+        /\/v2\/gifs\/SomeGif/,
+        () =>
+          tokenResponse({
+            gif: { hasAudio: true, urls: { hd: "https://media.redgifs.com/clip.mp4" } },
+          }),
+      ],
+    ]);
+
+    const page = await fetchSavedPage({
+      accessToken: "reddit-token",
+      username: "someone",
+    });
+
+    assert.equal(page.posts.length, 1);
+    assert.equal(page.posts[0].video?.url, "https://media.redgifs.com/clip.mp4");
+    assert.equal(page.posts[0].video?.hasAudio, true);
+    assert.ok(calls.some((call) => call.url.includes("/v2/gifs/SomeGif")));
   });
 });
 

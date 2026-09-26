@@ -222,10 +222,9 @@ function redgifsIdForPost(post: FlickPost): string | undefined {
 async function resolveExternalVideos(posts: FlickPost[]): Promise<FlickPost[]> {
   const out: FlickPost[] = [];
   for (const post of posts) {
-    if (post.video) {
-      out.push(post);
-      continue;
-    }
+    // Reddit may include its own transcoded (often silent) copy alongside the
+    // original Redgifs link. Prefer Redgifs before accepting post.video so the
+    // player receives the original MP4, including its audio track.
     const gifId = redgifsIdForPost(post);
     if (gifId) {
       const resolved = await resolveRedgifs(gifId);

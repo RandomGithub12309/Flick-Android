@@ -148,6 +148,17 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
 
   const nsfw = asBool(data.over_18) || asBool(sourceData.over_18);
   const url = asString(sourceData.url_overridden_by_dest) ?? asString(sourceData.url) ?? "";
+  // A Reddit crosspost can expose its own v.redd.it transcode as the media
+  // while retaining the original Redgifs URL on either the child or parent.
+  // Keep that URL available to the server-side resolver so it can prefer the
+  // original audio-bearing Redgifs file.
+  const redgifsUrl = [
+    url,
+    asString(data.url_overridden_by_dest),
+    asString(data.url),
+    asString(sourceData.url),
+    asString(sourceData.url_overridden_by_dest),
+  ].find((candidate) => candidate && redgifsIdFromUrl(candidate));
   const domain = asString(sourceData.domain);
 
   let video =
@@ -204,7 +215,7 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
     subreddit,
     author,
     permalink,
-    sourceUrl: url ? decodeUrl(url) : undefined,
+    sourceUrl: redgifsUrl ? decodeUrl(redgifsUrl) : url ? decodeUrl(url) : undefined,
     nsfw,
     score: asNumber(data.score) ?? 0,
     createdUtc: asNumber(data.created_utc) ?? 0,
