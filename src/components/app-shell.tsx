@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { ConnectForm } from "@/components/connect-form";
 import { Feed } from "@/components/feed";
 import { Landing } from "@/components/landing";
+import { completeAuthorizeWatch, stopAuthorizeWatch } from "@/lib/reddit/authorize-watch";
 import { completeOAuthCode } from "@/lib/reddit/oauth-complete";
 import { registerNativeOauthListener } from "@/lib/reddit/native-oauth";
 import { useFlick } from "@/store/flick";
@@ -27,10 +28,16 @@ export function AppShell() {
     const onMessage = (event: MessageEvent) => {
       const data = event.data as { type?: string; code?: string; state?: string };
       if (data?.type !== "flick-oauth" || !data.code) return;
+      // Sign-in succeeded — cancel the popup watcher so its timeout can't
+      // overwrite the feed with a stale "sign-in failed" message.
+      completeAuthorizeWatch();
       void completeOAuthCode(data.code, data.state ?? "");
     };
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      stopAuthorizeWatch();
+    };
   }, []);
 
   // Native (Android): Reddit hands back a flick://oauth deep link instead of

@@ -3,6 +3,7 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { trackAuthorizePopup } from "@/lib/reddit/authorize-watch";
 import { redditDemoFeed } from "@/lib/reddit/functions";
 import { NATIVE_REDIRECT_URI, isNative, openNativeAuthorize } from "@/lib/reddit/native-oauth";
 import { shuffleInPlace } from "@/lib/utils";
@@ -59,7 +60,14 @@ export function ConnectForm() {
       return;
     }
     const popup = window.open(url.toString(), "reddit-oauth", "width=480,height=740");
-    if (!popup) window.location.href = url.toString();
+    // Reddit validates redirect_uri before the person presses Allow and fails
+    // with a bare `{}` on its own endpoint if it doesn't match — no redirect
+    // ever reaches us, so watch the popup ourselves or the user is stranded.
+    if (!popup) {
+      window.location.href = url.toString();
+      return;
+    }
+    trackAuthorizePopup(popup, oauthRedirect);
   }
 
   async function playDemo() {
@@ -156,6 +164,11 @@ export function ConnectForm() {
             <li>
               Redirect URI:{" "}
               <span className="break-all text-fg">{oauthRedirect || "http://localhost:8080/oauth"}</span>
+            </li>
+            <li>
+              That string must match your Reddit app <span className="text-fg">exactly</span> —
+              Reddit checks it before you press Allow, and if it differs it fails the grant on its
+              own page showing <span className="text-fg">{"{}"}</span> and never returns to Flick.
             </li>
             <li>Copy the ID under the app name into the field above.</li>
           </ol>

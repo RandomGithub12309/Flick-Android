@@ -8,9 +8,20 @@ native code is what lets Reddit hand control back to the app after sign-in.
 ## One-time setup
 
 1. **Deploy the web app** (e.g. `vercel --prod` — `vercel.json` is already
-   configured for it). Copy the deployed URL.
+   configured for it). Use the **production** URL — the bare project alias,
+   e.g. `https://flick-android.vercel.app`.
 2. **Point the app at it** — edit `capacitor.config.ts` and replace
    `server.url` with that deployed URL.
+
+   > **Use a production URL, never a preview URL.** A preview deployment looks
+   > like `https://flick-android-ehld5hhmk-lr-0a58.vercel.app` — the tell is
+   > the random suffix before `.vercel.app`. Vercel puts preview deployments
+   > behind **Deployment Protection**, so they 302-redirect to
+   > `vercel.com/login`. Inside the app's WebView that renders a Vercel login
+   > page asking for your account credentials instead of Flick, and every
+   > server function (`redditExchangeCode`, saved-post fetching) fails — so
+   > Reddit sign-in can never complete. If the app opens a browser asking for
+   > a password, this is why.
 3. **Register the installed app on Reddit** at reddit.com/prefs/apps:
    - type: **installed app**
    - redirect URI: `flick://oauth`
