@@ -1,0 +1,56 @@
+diff --git a/NATIVE_ANDROID.md b/NATIVE_ANDROID.md
+index 2612485b..3bf9a5d7 100644
+--- a/NATIVE_ANDROID.md
++++ b/NATIVE_ANDROID.md
+@@ -8,9 +8,20 @@ native code is what lets Reddit hand control back to the app after sign-in.
+ ## One-time setup
+ 
+ 1. **Deploy the web app** (e.g. `vercel --prod` — `vercel.json` is already
+-   configured for it). Copy the deployed URL.
++   configured for it). Use the **production** URL — the bare project alias,
++   e.g. `https://flick-android.vercel.app`.
+ 2. **Point the app at it** — edit `capacitor.config.ts` and replace
+    `server.url` with that deployed URL.
++
++   > **Use a production URL, never a preview URL.** A preview deployment looks
++   > like `https://flick-android-ehld5hhmk-lr-0a58.vercel.app` — the tell is
++   > the random suffix before `.vercel.app`. Vercel puts preview deployments
++   > behind **Deployment Protection**, so they 302-redirect to
++   > `vercel.com/login`. Inside the app's WebView that renders a Vercel login
++   > page asking for your account credentials instead of Flick, and every
++   > server function (`redditExchangeCode`, saved-post fetching) fails — so
++   > Reddit sign-in can never complete. If the app opens a browser asking for
++   > a password, this is why.
+ 3. **Register the installed app on Reddit** at reddit.com/prefs/apps:
+    - type: **installed app**
+    - redirect URI: `flick://oauth`
+diff --git a/capacitor.config.ts b/capacitor.config.ts
+index 04615d57..5cf4e9c9 100644
+--- a/capacitor.config.ts
++++ b/capacitor.config.ts
+@@ -7,8 +7,11 @@ import type { CapacitorConfig } from "@capacitor/cli";
+  * all run as server functions), so the packaged app is a thin native shell
+  * that loads the *live deployed* site — not a bundled static copy of it.
+  *
+- * >>> Deploy the web app first (e.g. to Vercel), then replace the URL below
+- * >>> with that deployed https URL before running `npx cap sync android`.
++ * >>> This must be a *production* (production-alias) deployment URL.
++ * >>> Preview deployment URLs (…-lr-0a58.vercel.app) are behind Vercel
++ * >>> Deployment Protection and 302-redirect to vercel.com/login, which
++ * >>> renders a login wall inside the WebView and breaks every server
++ * >>> function call. Run `npx cap sync android` after changing it.
+  *
+  * The custom URL scheme below ("flick://oauth") is what lets Reddit hand
+  * control back to this native app after the person authorizes in the
+@@ -20,8 +23,9 @@ const config: CapacitorConfig = {
+   appName: "Flick",
+   webDir: "native/www",
+   server: {
+-    // TODO: replace with your deployed URL, e.g. "https://flick-saved.vercel.app"
+-    url: "https://flick-android-ehld5hhmk-lr-0a58.vercel.app",
++    // Production deployment. Do NOT point this at a Vercel *preview* URL —
++    // those are protected by a Vercel login wall that the WebView can't pass.
++    url: "https://flick-android.vercel.app",
+     cleartext: false,
+   },
+ };
