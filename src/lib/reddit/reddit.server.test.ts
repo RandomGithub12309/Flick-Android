@@ -271,6 +271,54 @@ describe("redgifs clips replace Reddit's muted copy", () => {
     );
   });
 
+  it("keeps Reddit's audio on the fallback, so a failed redgifs URL is not silent", async () => {
+    // The preview here is a normal upload with its own audio track, not the
+    // muted one — exactly the case where dropping the audio would leave the
+    // fallback playing nothing at all.
+    const withAudio = redgifsLinkPost("audiofallback", {
+      preview: {
+        reddit_video_preview: {
+          fallback_url: "https://v.redd.it/audiofallback/DASH_480.mp4?source=fallback",
+          width: 480,
+          height: 854,
+          has_audio: true,
+        },
+      },
+    });
+    stub([
+      [/oauth\.reddit\.com\/user/, () => tokenResponse(savedListing([withAudio]))],
+      [/api\.redgifs\.com\/v2\/auth\/temporary/, () => tokenResponse({ token: "rg-token" })],
+      [
+        /api\.redgifs\.com\/v2\/gifs\//,
+        () =>
+          tokenResponse({
+            gif: {
+              hasAudio: true,
+              urls: { hd: "https://media.redgifs.com/AudioFallback.mp4" },
+            },
+          }),
+      ],
+    ]);
+
+    const page = await fetchSavedPage({ accessToken: "at", username: "someone" });
+    const video = page.posts[0].video;
+
+    assert.equal(video?.url, "https://media.redgifs.com/AudioFallback.mp4");
+    assert.equal(
+      video?.fallbackUrl,
+      "https://v.redd.it/audiofallback/DASH_480.mp4?source=fallback",
+    );
+    // The fallback is video-only on Reddit, so its sound lives in the sidecar.
+    assert.ok(
+      video?.fallbackAudioUrls?.length,
+      "the fallback must keep an audio track, or it plays silent",
+    );
+    assert.match(video?.fallbackAudioUrls?.[0] ?? "", /audiofallback/);
+    // The primary is the redgifs mp4, which has its own sound — a sidecar here
+    // would double it.
+    assert.equal(video?.audioUrls, undefined);
+  });
+
   it("looks the clip up with a bearer token and an app User-Agent", async () => {
     stub(
       redgifsRoutes("happymagentafrog", {

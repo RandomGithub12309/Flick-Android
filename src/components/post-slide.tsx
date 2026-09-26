@@ -5,6 +5,7 @@ import { SeekBar } from "@/components/seek-bar";
 import { VideoPlayer } from "@/components/video-player";
 import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
 import { requestRedgifsClip } from "@/lib/reddit/clip";
+import { audioCandidatesFor } from "@/lib/video-sources";
 import { cn, formatScore, isLandscapeRatio, mediaRatio } from "@/lib/utils";
 
 /**
@@ -89,19 +90,26 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
     if (retries.current < MAX_CLIP_RETRIES) {
       retries.current += 1;
       const failedUrl = video?.url;
+      const redditCopy = post.video;
       void requestRedgifsClip(redgifsId, { fresh: true }).then((resolved) => {
         if (!resolved || resolved.url === failedUrl) {
           setUnplayable(true);
           return;
         }
-        setClip({ ...resolved, fallbackUrl: post.video?.fallbackUrl });
+        // A fresh URL is not a fresh chance to be the last one: keep the host's
+        // own copy, with its audio, as the fallback for the new attempt too.
+        setClip({
+          ...resolved,
+          fallbackUrl: redditCopy?.fallbackUrl ?? redditCopy?.url,
+          fallbackAudioUrls: redditCopy?.fallbackAudioUrls ?? audioCandidatesFor(redditCopy),
+        });
       });
       return;
     }
     // Out of retries. This is a clip someone deliberately saved, so show the
     // post (poster, title, a way out to redgifs) rather than skipping it.
     setUnplayable(true);
-  }, [onUnplayable, post.video?.fallbackUrl, redgifsId, video?.url]);
+  }, [onUnplayable, post.video, redgifsId, video?.url]);
 
   return (
     <article

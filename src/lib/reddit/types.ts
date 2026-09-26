@@ -23,8 +23,21 @@ export type FlickVideo = {
    * Every audio URL Reddit might be serving for this video, most likely first.
    * Reddit has renamed its audio files more than once, so the player walks the
    * list until one loads instead of guessing a single name.
+   *
+   * These belong to {@link url} — a v.redd.it upload ships video and audio as
+   * separate files. They say nothing about {@link fallbackUrl}; see
+   * {@link fallbackAudioUrls}.
    */
   audioUrls?: string[];
+  /**
+   * Audio that belongs to {@link fallbackUrl} rather than to {@link url}.
+   *
+   * A redgifs clip muxes its sound into the mp4, so it needs no sidecar, while
+   * the host's own copy kept as a fallback is usually a video-only Reddit
+   * upload. Without this the fallback plays silently the moment redgifs is
+   * unreachable — the exact case the fallback exists to cover.
+   */
+  fallbackAudioUrls?: string[];
   width: number;
   height: number;
   duration?: number;

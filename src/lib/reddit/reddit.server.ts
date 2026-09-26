@@ -1,4 +1,5 @@
 import { parseListingChildren, parseRedditPost, redgifsIdFromPost } from "./parse";
+import { audioCandidatesFor } from "../video-sources";
 import type { FlickPost, SavedPage } from "./types";
 
 const USER_AGENT = "android:app.flick.saved:1.0.0 (by /u/flick-player)";
@@ -378,11 +379,14 @@ async function resolveExternalVideos(posts: FlickPost[]): Promise<FlickPost[]> {
       kind: "video",
       redgifsId: gifId,
       video: {
-        // Redgifs muxes the sound into the mp4, so there is no audio sidecar.
+        // Redgifs muxes the sound into the mp4, so the primary source gets no
+        // audio sidecar — attaching one would play the clip's own audio twice.
         url: clip.url,
         // Where the redgifs CDN can't be reached, Reddit's own copy still plays
-        // (silently) rather than the feed skipping the post.
+        // rather than the feed skipping the post — and it keeps its own audio
+        // track, so the fallback is not the silent one.
         fallbackUrl: post.video?.url,
+        fallbackAudioUrls: audioCandidatesFor(post.video),
         width: clip.width ?? post.video?.width ?? 720,
         height: clip.height ?? post.video?.height ?? 1280,
         duration: clip.duration ?? post.video?.duration,
