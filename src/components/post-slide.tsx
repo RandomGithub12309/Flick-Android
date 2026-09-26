@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, Link2 } from "lucide-react";
 import type { FlickPost } from "@/lib/reddit/types";
+import { SeekBar } from "@/components/seek-bar";
 import { SpeedBar } from "@/components/speed-bar";
 import { VideoPlayer } from "@/components/video-player";
+import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
 import { useFlick } from "@/store/flick";
 import { cn, formatScore } from "@/lib/utils";
 
@@ -17,8 +19,14 @@ type Props = {
 };
 
 export function PostSlide({ post, active, muted, offset, drag, animating, onUnplayable }: Props) {
-  const [progress, setProgress] = useState(0);
+  const [playback, setPlayback] = useState<PlaybackInfo>({
+    ratio: null,
+    buffered: null,
+    current: 0,
+    duration: 0,
+  });
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const videoRef = useRef<VideoHandle>(null);
   const playbackRate = useFlick((s) => s.playbackRate);
   const setPlaybackRate = useFlick((s) => s.setPlaybackRate);
   const gallery = post.gallery ?? [];
@@ -35,11 +43,12 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
     >
       {post.kind === "video" && post.video ? (
         <VideoPlayer
+          ref={videoRef}
           video={post.video}
           active={active}
           muted={muted}
           playbackRate={playbackRate}
-          onProgress={setProgress}
+          onProgress={setPlayback}
           onUnplayable={onUnplayable}
         />
       ) : image ? (
@@ -71,18 +80,8 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
 
       <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-bg/80 via-transparent to-bg/35" />
 
-      {post.kind === "video" ? (
-        <>
-          {/* Only the active slide gets the control — three overlapping
-              scrubbers would fight each other for the same gesture. */}
-          {active ? <SpeedBar rate={playbackRate} onChange={setPlaybackRate} /> : null}
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-fg/15">
-            <div
-              className="h-full bg-fg/40"
-              style={{ width: `${Math.min(100, progress * 100)}%` }}
-            />
-          </div>
-        </>
+      {post.kind === "video" && active ? (
+        <SpeedBar rate={playbackRate} onChange={setPlaybackRate} />
       ) : null}
 
       {post.kind === "gallery" && gallery.length > 1 ? (
@@ -109,6 +108,17 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
       ) : null}
 
       <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-safe pt-16">
+        {/* Only the active slide gets the control — three overlapping
+            scrubbers would fight each other for the same gesture. */}
+        {post.kind === "video" && active ? (
+          <SeekBar
+            ratio={playback.ratio}
+            buffered={playback.buffered}
+            current={playback.current}
+            duration={playback.duration}
+            onSeek={(ratio) => videoRef.current?.seek(ratio)}
+          />
+        ) : null}
         <div className="max-w-xs pb-6 pr-4">
           <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium text-fg">
             <span className="rounded-full bg-fg/12 px-2.5 py-1">r/{post.subreddit}</span>

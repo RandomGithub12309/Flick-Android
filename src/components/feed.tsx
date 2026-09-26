@@ -37,7 +37,12 @@ export function Feed() {
   const post = posts[index];
 
   const snap = useCallback(
-    (dir: -1 | 0 | 1) => {
+    (dir: -1 | 0 | 1, auto = false) => {
+      // Only deliberate navigation clears the run. An automatic skip changes
+      // the index as well, so resetting the counter on the index made the cap
+      // unreachable — every skip erased the evidence of the one before it and
+      // a dead feed could blur through itself forever.
+      if (!auto) skips.current = 0;
       setAnimating(true);
       if (dir === 1) {
         setDrag(-window.innerHeight);
@@ -82,7 +87,7 @@ export function Feed() {
     skipTimer.current = window.setTimeout(() => {
       skipTimer.current = null;
       setSkipNotice("Skipped — couldn't play that one");
-      snap(1);
+      snap(1, true);
     }, SKIP_SETTLE_MS);
   }, [snap]);
 
@@ -100,11 +105,6 @@ export function Feed() {
       }
     };
   }, [skipNotice]);
-
-  // Any deliberate navigation means the feed is healthy again.
-  useEffect(() => {
-    skips.current = 0;
-  }, [index]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
