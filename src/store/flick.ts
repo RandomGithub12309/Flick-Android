@@ -14,6 +14,17 @@ type FlickState = {
   screen: Screen;
   source: FeedSource;
   session: RedditSession | null;
+  /**
+   * Overrides the redirect URI sent to Reddit. Empty means "use Flick's own".
+   *
+   * Reddit validates redirect_uri against the value registered on the app
+   * *before* the person presses Allow, and a mismatch fails the grant outright.
+   * Reddit only lets you edit apps you created, so anyone reusing an existing
+   * installed app whose redirect URI they can't change needs to paste that
+   * exact string here — otherwise there is no value Flick could send that
+   * Reddit would accept.
+   */
+  redditRedirectUri: string;
   posts: FlickPost[];
   index: number;
   muted: boolean;
@@ -28,6 +39,7 @@ type FlickState = {
   setError: (error: string | null) => void;
   setLoading: (label: string, count?: number) => void;
   setPosts: (posts: FlickPost[], source: FeedSource) => void;
+  setRedditRedirectUri: (uri: string) => void;
   setIndex: (index: number) => void;
   next: () => void;
   prev: () => void;
@@ -41,6 +53,7 @@ export const useFlick = create<FlickState>()(
   persist(
     (set, get) => ({
       ageOk: false,
+      redditRedirectUri: "",
       screen: "home",
       source: "demo",
       session: null,
@@ -86,6 +99,7 @@ export const useFlick = create<FlickState>()(
         if (posts.length === 0) return;
         set({ index: (index - 1 + posts.length) % posts.length });
       },
+      setRedditRedirectUri: (uri) => set({ redditRedirectUri: uri.trim() }),
       reroll: () => {
         const { posts, index } = get();
         if (posts.length < 2) return;
@@ -112,6 +126,7 @@ export const useFlick = create<FlickState>()(
         session: state.session,
         muted: state.muted,
         playbackRate: state.playbackRate,
+        redditRedirectUri: state.redditRedirectUri,
       }),
     },
   ),
