@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { exchangeCode, fetchSavedPage, refreshGrant } from "./reddit.server.ts";
+import { exchangeCode, fetchSavedPage, refreshGrant, streamRedgifsFile } from "./reddit.server.ts";
 
 /**
  * Flick is a Reddit **installed app**: a public client issued with no client
@@ -258,7 +258,8 @@ describe("redgifs clips replace Reddit's muted copy", () => {
     const post = page.posts[0];
 
     assert.equal(post.kind, "video");
-    assert.equal(post.video?.url, "https://media.redgifs.com/SneakyBlueOtter.mp4");
+    // Through the proxy: the CDN 403s a bare browser fetch.
+    assert.equal(post.video?.url, "/api/redgifs/sneakyblueotter");
     // Redgifs muxes sound into the mp4 — there is no separate audio file.
     assert.equal(post.video?.hasAudio, true);
     assert.equal(post.video?.audioUrl, undefined);
@@ -303,7 +304,7 @@ describe("redgifs clips replace Reddit's muted copy", () => {
     const page = await fetchSavedPage({ accessToken: "at", username: "someone" });
     const video = page.posts[0].video;
 
-    assert.equal(video?.url, "https://media.redgifs.com/AudioFallback.mp4");
+    assert.equal(video?.url, "/api/redgifs/audiofallback");
     assert.equal(
       video?.fallbackUrl,
       "https://v.redd.it/audiofallback/DASH_480.mp4?source=fallback",
@@ -368,7 +369,7 @@ describe("redgifs clips replace Reddit's muted copy", () => {
 
     const page = await fetchSavedPage({ accessToken: "at", username: "someone" });
 
-    assert.equal(page.posts[0].video?.url, "https://media.redgifs.com/StaleToken.mp4");
+    assert.equal(page.posts[0].video?.url, "/api/redgifs/staletoken");
     const tokens = calls
       .filter((c) => c.url.includes("/v2/gifs/"))
       .map((c) => (c.init.headers as Record<string, string>).Authorization);
@@ -427,18 +428,19 @@ describe("redgifs clips replace Reddit's muted copy", () => {
     const first = await fetchSavedPage({ accessToken: "at", username: "someone" });
     const second = await fetchSavedPage({ accessToken: "at", username: "someone" });
 
-    assert.equal(first.posts[0].video?.url, "https://media.redgifs.com/CacheableClip.mp4");
-    assert.equal(second.posts[0].video?.url, "https://media.redgifs.com/CacheableClip.mp4");
+    assert.equal(first.posts[0].video?.url, "/api/redgifs/cacheableclip");
+    assert.equal(second.posts[0].video?.url, "/api/redgifs/cacheableclip");
     const lookups = calls.filter((c) => c.url.includes("/v2/gifs/"));
     assert.equal(lookups.length, 1, "second load should be answered from cache");
   });
 
   /**
-   * Signed links carry an `expires` stamp. Caching one past that stamp is a
-   * 403 on the device, which is a video that errors and gets skipped — so the
-   * cache entry has to die with the link.
+   * Signed links carry an `expires` stamp, but the feed never sees one: it
+   * plays the stable proxy URL, and the proxy re-resolves the direct link
+   * server-side on every play. An expiring direct link must therefore surface
+   * as the proxy URL, not leak through to the device.
    */
-  it("re-resolves instead of serving a signed url that has already expired", async () => {
+  it("serves the stable proxy url even when the direct link is expiring", async () => {
     stub(
       redgifsRoutes("expiringclip", {
         gif: {
@@ -450,11 +452,9 @@ describe("redgifs clips replace Reddit's muted copy", () => {
       }),
     );
 
-    await fetchSavedPage({ accessToken: "at", username: "someone" });
-    await fetchSavedPage({ accessToken: "at", username: "someone" });
+    const page = await fetchSavedPage({ accessToken: "at", username: "someone" });
 
-    const lookups = calls.filter((c) => c.url.includes("/v2/gifs/"));
-    assert.equal(lookups.length, 2, "an expired link must not be reused");
+    assert.equal(page.posts[0].video?.url, "/api/redgifs/expiringclip");
   });
 
   it("plays a post that links a redgifs clip file, upgrading it to the HD copy", async () => {
@@ -501,10 +501,11 @@ describe("redgifs clips replace Reddit's muted copy", () => {
 
     assert.equal(post.kind, "video");
     // The HD copy with sound wins over the silent file the post linked to…
-    assert.equal(post.video?.url, "https://media.redgifs.com/ZealousGreenShark.mp4");
+    assert.equal(post.video?.url, "/api/redgifs/zealousgreenshark");
     assert.equal(post.video?.hasAudio, true);
-    // …and the linked file stays as the fallback if redgifs' API is down.
-    assert.equal(post.video?.fallbackUrl, "https://media.redgifs.com/ZealousGreenShark-silent.mp4");
+    // …and the linked file stays as the fallback if redgifs' API is down —
+    // through the proxy as well, since the CDN 403s bare browser fetches.
+    assert.equal(post.video?.fallbackUrl, "/api/redgifs/zealousgreenshark");
   });
 
   it("leaves a plain reddit upload alone, audio track included", async () => {
@@ -551,5 +552,99 @@ describe("redgifs clips replace Reddit's muted copy", () => {
       calls.some((c) => c.url.includes("redgifs")),
       false,
     );
+  });
+});
+
+describe("redgifs proxy stream", () => {
+  /**
+   * The CDN signs clip URLs per requesting IP and validates UA/Referer, so a
+   * link resolved on the server 403s in the browser. The proxy resolves and
+   * fetches server-side and streams the bytes from our own origin instead.
+   */
+  const gifRoute = (id: string, direct: string): Array<[RegExp, () => Response]> => [
+    [/api\.redgifs\.com\/v2\/auth\/temporary/, () => tokenResponse({ token: "rg-token" })],
+    [
+      /api\.redgifs\.com\/v2\/gifs\//,
+      () => tokenResponse({ gif: { hasAudio: true, urls: { hd: direct } } }),
+    ],
+  ];
+
+  it("streams bytes with the headers the CDN demands", async () => {
+    stub([
+      ...gifRoute("proxystreamone", "https://media.redgifs.com/ProxyStreamOne.mp4"),
+      [
+        /media\.redgifs\.com/,
+        () =>
+          new Response("full-bytes", {
+            status: 200,
+            headers: { "content-type": "video/mp4", "content-length": "10" },
+          }),
+      ],
+    ]);
+
+    const res = await streamRedgifsFile(
+      "proxystreamone",
+      new Request("https://flick.test/api/redgifs/proxystreamone"),
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "video/mp4");
+    assert.equal(res.headers.get("accept-ranges"), "bytes");
+    assert.equal(await res.text(), "full-bytes");
+
+    const cdn = calls.find((c) => c.url.includes("media.redgifs.com"))!;
+    const headers = new Headers(cdn.init.headers);
+    assert.match(headers.get("User-Agent") ?? "", /Chrome/);
+    assert.match(headers.get("Referer") ?? "", /redgifs\.com\/watch\//);
+  });
+
+  it("forwards Range and passes 206 through for seeking", async () => {
+    stub([
+      ...gifRoute("proxystreamtwo", "https://media.redgifs.com/ProxyStreamTwo.mp4"),
+      [
+        /media\.redgifs\.com/,
+        () =>
+          new Response("bytes", {
+            status: 206,
+            headers: {
+              "content-type": "video/mp4",
+              "content-range": "bytes 0-4/100",
+              "content-length": "5",
+              "accept-ranges": "bytes",
+            },
+          }),
+      ],
+    ]);
+
+    const res = await streamRedgifsFile(
+      "proxystreamtwo",
+      new Request("https://flick.test/api/redgifs/proxystreamtwo", {
+        headers: { Range: "bytes=0-4" },
+      }),
+    );
+
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get("content-range"), "bytes 0-4/100");
+    const cdn = calls.find((c) => c.url.includes("media.redgifs.com"))!;
+    assert.equal(new Headers(cdn.init.headers).get("Range"), "bytes=0-4");
+  });
+
+  it("rejects bad ids without touching the network", async () => {
+    stub([]);
+    const res = await streamRedgifsFile("../x", new Request("https://flick.test/api/redgifs/x"));
+    assert.equal(res.status, 400);
+    assert.equal(calls.length, 0);
+  });
+
+  it("502s when the clip no longer resolves", async () => {
+    stub([
+      [/api\.redgifs\.com\/v2\/auth\/temporary/, () => tokenResponse({ token: "rg-token" })],
+      [/api\.redgifs\.com\/v2\/gifs\//, () => tokenResponse({ error: "gone" }, 404)],
+    ]);
+    const res = await streamRedgifsFile(
+      "proxystreamgone",
+      new Request("https://flick.test/api/redgifs/proxystreamgone"),
+    );
+    assert.equal(res.status, 502);
   });
 });

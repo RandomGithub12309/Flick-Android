@@ -313,7 +313,8 @@ describe("redgifs ids", () => {
     );
 
     assert.equal(post?.kind, "video");
-    assert.equal(post?.video?.url, "https://media.redgifs.com/ZealousGreenShark-mobile.mp4");
+    // Through the proxy: the CDN 403s a bare browser fetch.
+    assert.equal(post?.video?.url, "/api/redgifs/zealousgreenshark");
     assert.equal(post?.video?.hasAudio, true);
     assert.equal(post?.redgifsId, "zealousgreenshark");
   });

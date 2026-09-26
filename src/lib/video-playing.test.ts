@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isVideoPlaying, shouldSkipDeadVideo } from "./video-playing";
+import { effectiveDuration, isVideoPlaying, shouldSkipDeadVideo } from "./video-playing";
 
 const state = (
   overrides: Partial<{ paused: boolean; ended: boolean; currentTime: number }> = {},
@@ -50,4 +50,17 @@ test("a hard error can skip a frozen clip even after it advanced", () => {
     shouldSkip({ reason: "error", video: state({ paused: false, currentTime: 3 }) }),
     false,
   );
+});
+
+test("prefers a finite duration, then the seekable end, then unknown", () => {
+  assert.equal(effectiveDuration(12.5, null), 12.5);
+  assert.equal(effectiveDuration(12.5, 30), 12.5);
+  // Fragmented uploads report Infinity/NaN while still seekable.
+  assert.equal(effectiveDuration(Infinity, 30), 30);
+  assert.equal(effectiveDuration(NaN, 30), 30);
+  assert.equal(effectiveDuration(0, 30), 30);
+  // Nothing usable anywhere: unknown.
+  assert.equal(effectiveDuration(Infinity, null), 0);
+  assert.equal(effectiveDuration(NaN, NaN), 0);
+  assert.equal(effectiveDuration(0, 0), 0);
 });

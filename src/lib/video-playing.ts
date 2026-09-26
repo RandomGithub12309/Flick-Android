@@ -16,6 +16,20 @@ export function isVideoPlaying(video: VideoPlaybackState | null): boolean {
 }
 
 /**
+ * Usable timeline length for progress and seeking. Fragmented uploads
+ * (v.redd.it DASH/CMAF) regularly report `duration` as Infinity or NaN while
+ * still exposing a perfectly seekable range — so fall back to the end of the
+ * seekable window before giving up and calling the length unknown (0).
+ */
+export function effectiveDuration(duration: number, seekableEnd: number | null): number {
+  if (Number.isFinite(duration) && duration > 0) return duration;
+  if (seekableEnd != null && Number.isFinite(seekableEnd) && seekableEnd > 0) {
+    return seekableEnd;
+  }
+  return 0;
+}
+
+/**
  * Decide whether a player failure should cause the feed to skip this post.
  * Preloaded/offscreen and tap-to-play videos are never treated as dead. A
  * start timeout is also inconclusive after playback has made progress, while

@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as OauthRouteImport } from './routes/oauth'
+import { Route as ApiRedgifsIdRouteImport } from './routes/api/redgifs.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +23,40 @@ const OauthRoute = OauthRouteImport.update({
   path: '/oauth',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiRedgifsIdRoute = ApiRedgifsIdRouteImport.update({
+  id: '/api/redgifs/$id',
+  path: '/api/redgifs/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/oauth': typeof OauthRoute
+  '/api/redgifs/$id': typeof ApiRedgifsIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/oauth': typeof OauthRoute
+  '/api/redgifs/$id': typeof ApiRedgifsIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/oauth': typeof OauthRoute
+  '/api/redgifs/$id': typeof ApiRedgifsIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/oauth'
+  fullPaths: '/' | '/oauth' | '/api/redgifs/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/oauth'
-  id: '__root__' | '/' | '/oauth'
+  to: '/' | '/oauth' | '/api/redgifs/$id'
+  id: '__root__' | '/' | '/oauth' | '/api/redgifs/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   OauthRoute: typeof OauthRoute
+  ApiRedgifsIdRoute: typeof ApiRedgifsIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +75,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/redgifs/$id': {
+      id: '/api/redgifs/$id'
+      path: '/api/redgifs/$id'
+      fullPath: '/api/redgifs/$id'
+      preLoaderRoute: typeof ApiRedgifsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   OauthRoute: OauthRoute,
+  ApiRedgifsIdRoute: ApiRedgifsIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

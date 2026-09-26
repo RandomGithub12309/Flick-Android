@@ -150,6 +150,9 @@ export default defineConfig(({ command, isPreview }) => ({
     host: "0.0.0.0",
     port: 8080,
     strictPort: true,
+    // The live preview reaches the dev server through a proxy host, which
+    // Vite's host check would otherwise reject with a 403.
+    allowedHosts: true,
   },
   preview: {
     host: "127.0.0.1",
