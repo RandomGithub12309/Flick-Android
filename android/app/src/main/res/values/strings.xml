@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Flick</string>
+    <string name="title_activity_main">Flick</string>
+    <string name="package_name">app.flick.saved</string>
+    <string name="custom_url_scheme">app.flick.saved</string>
+</resources>

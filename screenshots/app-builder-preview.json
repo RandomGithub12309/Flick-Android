@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Flick",
+      "hasCanvas": false,
+      "bodyTextLen": 95,
+      "bodyTextHash": "074b23dee1aa9e8640325697fecad482acb567e4f2a5b434365fdec698967566",
+      "bodyTextPrefix": "18+ PLAYER Flick Full-screen Reddit saves. Sound on. No blur, no",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Flick",
+      "hasCanvas": false,
+      "bodyTextLen": 95,
+      "bodyTextHash": "074b23dee1aa9e8640325697fecad482acb567e4f2a5b434365fdec698967566",
+      "bodyTextPrefix": "18+ PLAYER Flick Full-screen Reddit saves. Sound on. No blur, no",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
