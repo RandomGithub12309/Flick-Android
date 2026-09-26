@@ -6,7 +6,7 @@ import { SpeedBar } from "@/components/speed-bar";
 import { VideoPlayer } from "@/components/video-player";
 import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
 import { useFlick } from "@/store/flick";
-import { cn, formatScore } from "@/lib/utils";
+import { cn, formatScore, isLandscapeRatio, mediaRatio } from "@/lib/utils";
 
 type Props = {
   post: FlickPost;
@@ -32,6 +32,9 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
   const gallery = post.gallery ?? [];
   const image =
     post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
+  const poster = post.image?.url ?? post.thumbnail;
+  const landscapeVideo = isLandscapeRatio(mediaRatio(post.video?.width, post.video?.height));
+  const landscapeImage = isLandscapeRatio(mediaRatio(image?.width, image?.height));
 
   return (
     <article
@@ -48,16 +51,31 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
           active={active}
           muted={muted}
           playbackRate={playbackRate}
+          poster={poster}
           onProgress={setPlayback}
           onUnplayable={onUnplayable}
         />
       ) : image ? (
-        <img
-          src={image.url}
-          alt={post.title}
-          className="absolute inset-0 size-full object-cover outline outline-1 -outline-offset-1 outline-fg/10"
-          draggable={false}
-        />
+        <>
+          {landscapeImage ? (
+            <img
+              src={image.url}
+              alt=""
+              aria-hidden
+              draggable={false}
+              className="absolute inset-0 size-full object-cover opacity-70 blur-2xl scale-125"
+            />
+          ) : null}
+          <img
+            src={image.url}
+            alt={post.title}
+            className={cn(
+              "absolute inset-0 size-full outline outline-1 -outline-offset-1 outline-fg/10",
+              landscapeImage ? "object-contain" : "object-cover",
+            )}
+            draggable={false}
+          />
+        </>
       ) : (
         <div className="absolute inset-0 flex flex-col justify-end bg-surface px-5 pb-32 pt-safe">
           <div className="mb-4 text-subtle">
@@ -78,7 +96,14 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-bg/80 via-transparent to-bg/35" />
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-0",
+          landscapeVideo
+            ? "bg-linear-to-t from-bg/85 from-20% via-transparent to-transparent"
+            : "bg-linear-to-t from-bg/80 via-transparent to-bg/35",
+        )}
+      />
 
       {post.kind === "video" && active ? (
         <SpeedBar rate={playbackRate} onChange={setPlaybackRate} />

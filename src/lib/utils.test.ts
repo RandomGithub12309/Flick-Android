@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatTime } from "./utils";
+import { containRect, formatTime, isLandscapeRatio, mediaRatio } from "./utils";
 
 test("formatTime renders minutes and padded seconds under an hour", () => {
   assert.equal(formatTime(0), "0:00");
@@ -30,4 +30,38 @@ test("formatTime clamps anything that isn't a usable duration to zero", () => {
   assert.equal(formatTime(Number.NaN), "0:00");
   assert.equal(formatTime(Number.POSITIVE_INFINITY), "0:00");
   assert.equal(formatTime(Number.NEGATIVE_INFINITY), "0:00");
+});
+
+test("mediaRatio is null for unusable sizes", () => {
+  assert.equal(mediaRatio(), null);
+  assert.equal(mediaRatio(0, 9), null);
+  assert.equal(mediaRatio(16, 0), null);
+  assert.equal(mediaRatio(-16, 9), null);
+  assert.equal(mediaRatio(Number.NaN, 9), null);
+});
+
+test("mediaRatio and isLandscapeRatio classify 16:9 vs 9:16", () => {
+  assert.equal(mediaRatio(1920, 1080), 1920 / 1080);
+  assert.equal(isLandscapeRatio(mediaRatio(1920, 1080)), true);
+  assert.equal(isLandscapeRatio(mediaRatio(1080, 1920)), false);
+  assert.equal(isLandscapeRatio(mediaRatio(100, 100)), false);
+  assert.equal(isLandscapeRatio(null), false);
+});
+
+test("containRect letterboxes 16:9 into a portrait frame without cropping", () => {
+  const box = containRect(1080, 1920, 1920, 1080);
+  assert.equal(box.width, 1080);
+  assert.equal(box.height, 1080 * (1080 / 1920));
+  assert.equal(box.left, 0);
+  assert.equal(box.top, (1920 - box.height) / 2);
+  // Fitted height is well under the frame — the sides aren't cropped.
+  assert.ok(box.height < 1920);
+});
+
+test("containRect fits 9:16 into the same portrait frame", () => {
+  const box = containRect(1080, 1920, 1080, 1920);
+  assert.equal(box.width, 1080);
+  assert.equal(box.height, 1920);
+  assert.equal(box.left, 0);
+  assert.equal(box.top, 0);
 });

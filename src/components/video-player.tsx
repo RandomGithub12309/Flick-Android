@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Play } from "lucide-react";
 import type { FlickVideo } from "@/lib/reddit/types";
+import { cn, containRect, isLandscapeRatio, mediaRatio } from "@/lib/utils";
 
 /**
  * How long the active video gets to actually start before we write it off.
@@ -44,17 +45,20 @@ type Props = {
   active: boolean;
   muted: boolean;
   playbackRate: number;
+  /** Still frame used as a blurred fill behind letterboxed landscape clips. */
+  poster?: string;
   onProgress?: (info: PlaybackInfo) => void;
   /** Fired once per activation when this video can't be played at all. */
   onUnplayable?: () => void;
 };
 
 export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
-  { video, active, muted, playbackRate, onProgress, onUnplayable },
+  { video, active, muted, playbackRate, poster, onProgress, onUnplayable },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
 
   const startTimer = useRef<number | null>(null);
   const stallCheck = useRef<number | null>(null);
@@ -62,6 +66,9 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   const started = useRef(false);
   const lastTick = useRef(0);
   const [blocked, setBlocked] = useState(false);
+  const [native, setNative] = useState({ w: video.width, h: video.height });
+  const [measured, setMeasured] = useState(false);
+  const [frame, setFrame] = useState({ w: 0, h: 0 });
 
   const clearTimers = useCallback(() => {
     if (startTimer.current !== null) window.clearTimeout(startTimer.current);
@@ -76,6 +83,31 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     clearTimers();
     onUnplayable?.();
   }, [clearTimers, onUnplayable]);
+
+  useEffect(() => {
+    setNative({ w: video.width, h: video.height });
+    setMeasured(false);
+  }, [video.url, video.width, video.height]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const update = () => setFrame({ w: stage.clientWidth, h: stage.clientHeight });
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(update);
+    ro.observe(stage);
+    return () => ro.disconnect();
+  }, [video.url]);
+
+  const ratio = mediaRatio(native.w, native.h);
+  // Until the element reports its size, letterbox — Reddit's fallback 720×1280
+  // would otherwise cover-crop a landscape file into a thin centre strip.
+  const letterbox = !measured || isLandscapeRatio(ratio) || ratio == null;
+  const box =
+    measured && letterbox && frame.w > 0 && native.w > 0 && native.h > 0
+      ? containRect(frame.w, frame.h, native.w, native.h)
+      : null;
 
   useImperativeHandle(
     ref,
@@ -151,6 +183,13 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       on("timeupdate", onTime),
       on("progress", publish),
       on("durationchange", publish),
+      on("loadedmetadata", () => {
+        if (el.videoWidth > 0 && el.videoHeight > 0) {
+          setNative({ w: el.videoWidth, h: el.videoHeight });
+          setMeasured(true);
+        }
+        publish();
+      }),
       on("seeked", () => {
         syncAudio();
         publish();
@@ -217,18 +256,49 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   }, [playbackRate, video.audioUrl, video.url]);
 
   return (
-    <>
-      {/* object-contain, not object-cover: a 16:9 clip in a portrait viewport
-          was being cropped to a thin centre band, hiding most of the frame. */}
+    <div ref={stageRef} className="absolute inset-0 overflow-hidden bg-black">
+      {letterbox && poster ? (
+        <img
+          src={poster}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className="absolute inset-0 size-full object-cover opacity-70 blur-2xl scale-125"
+        />
+      ) : null}
+      {/*
+        Landscape on a portrait screen is sized to a contain-rect (the full
+        frame, letterboxed) instead of object-cover, which sliced 16:9 clips
+        down to a thin centre band. Portrait clips still bleed to the edges.
+      */}
       <video
         ref={videoRef}
         src={video.url}
-        className="absolute inset-0 size-full bg-black object-contain"
+        poster={poster}
         playsInline
         loop
         autoPlay={active}
         muted={muted}
         preload={active ? "auto" : "metadata"}
+        style={
+          box
+            ? {
+                position: "absolute",
+                width: box.width,
+                height: box.height,
+                left: box.left,
+                top: box.top,
+              }
+            : undefined
+        }
+        className={cn(
+          "bg-black object-contain",
+          box
+            ? null
+            : letterbox
+              ? "absolute inset-0 size-full object-contain"
+              : "absolute inset-0 size-full object-cover",
+        )}
       />
       {blocked ? (
         <button
@@ -253,6 +323,6 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       {video.audioUrl ? (
         <audio ref={audioRef} src={video.audioUrl} loop preload={active ? "auto" : "none"} />
       ) : null}
-    </>
+    </div>
   );
 });
