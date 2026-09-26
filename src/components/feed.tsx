@@ -196,7 +196,9 @@ export function Feed() {
           offset={offset}
           drag={drag}
           animating={animating || startY.current != null}
-          onUnplayable={item.kind === "video" ? skipUnplayable : undefined}
+          onUnplayable={
+            offset === 0 && !animating && item.kind === "video" ? skipUnplayable : undefined
+          }
         />
       ))}
 

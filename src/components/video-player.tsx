@@ -1,14 +1,8 @@
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Play } from "lucide-react";
 import type { FlickVideo } from "@/lib/reddit/types";
 import { cn, containRect, isLandscapeRatio, mediaRatio } from "@/lib/utils";
+import { shouldSkipDeadVideo, type VideoFailureReason } from "@/lib/video-playing";
 
 /**
  * How long the active video gets to actually start before we write it off.
@@ -22,9 +16,6 @@ import { cn, containRect, isLandscapeRatio, mediaRatio } from "@/lib/utils";
  * becomes a tap-to-play prompt instead of a skip.
  */
 const START_GRACE_MS = 20_000;
-
-/** Once playing, this long with no `timeupdate` means the stream is wedged. */
-const STALL_AFTER_MS = 15_000;
 
 export type PlaybackInfo = {
   /** 0..1 through the timeline, or null until the duration is known. */
@@ -61,28 +52,41 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   const stageRef = useRef<HTMLDivElement>(null);
 
   const startTimer = useRef<number | null>(null);
-  const stallCheck = useRef<number | null>(null);
   const reported = useRef(false);
-  const started = useRef(false);
-  const lastTick = useRef(0);
+  const activeRef = useRef(active);
+  const blockedRef = useRef(false);
+  const onUnplayableRef = useRef(onUnplayable);
+  activeRef.current = active;
+  onUnplayableRef.current = onUnplayable;
   const [blocked, setBlocked] = useState(false);
   const [native, setNative] = useState({ w: video.width, h: video.height });
   const [measured, setMeasured] = useState(false);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
 
-  const clearTimers = useCallback(() => {
+  const clearStartTimer = useCallback(() => {
     if (startTimer.current !== null) window.clearTimeout(startTimer.current);
-    if (stallCheck.current !== null) window.clearInterval(stallCheck.current);
     startTimer.current = null;
-    stallCheck.current = null;
   }, []);
 
-  const reportUnplayable = useCallback(() => {
-    if (reported.current) return;
-    reported.current = true;
-    clearTimers();
-    onUnplayable?.();
-  }, [clearTimers, onUnplayable]);
+  const reportUnplayable = useCallback(
+    (reason: VideoFailureReason) => {
+      if (
+        !shouldSkipDeadVideo({
+          active: activeRef.current,
+          blocked: blockedRef.current,
+          reported: reported.current,
+          video: videoRef.current,
+          reason,
+        })
+      ) {
+        return;
+      }
+      reported.current = true;
+      clearStartTimer();
+      onUnplayableRef.current?.();
+    },
+    [clearStartTimer],
+  );
 
   useEffect(() => {
     setNative({ w: video.width, h: video.height });
@@ -156,18 +160,13 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     };
 
     const onPlaying = () => {
-      started.current = true;
-      lastTick.current = performance.now();
+      blockedRef.current = false;
       setBlocked(false);
-      if (startTimer.current !== null) {
-        window.clearTimeout(startTimer.current);
-        startTimer.current = null;
-      }
+      clearStartTimer();
     };
 
     const onTime = () => {
       syncAudio();
-      lastTick.current = performance.now();
       publish();
     };
 
@@ -194,10 +193,10 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         syncAudio();
         publish();
       }),
-      on("error", reportUnplayable),
+      on("error", () => reportUnplayable("error")),
     ];
     return () => offs.forEach((off) => off());
-  }, [onProgress, reportUnplayable, video.audioUrl]);
+  }, [clearStartTimer, onProgress, reportUnplayable, video.audioUrl]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -208,44 +207,45 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     if (!active) {
       el.pause();
       audio?.pause();
+      blockedRef.current = false;
       setBlocked(false);
       return;
     }
     void el.play().then(
-      () => setBlocked(false),
+      () => {
+        blockedRef.current = false;
+        setBlocked(false);
+      },
       (err: unknown) => {
         // Autoplay refused: the media is fine, the browser just wants a
         // gesture first. Ask for one rather than skipping a good post.
         if ((err as { name?: string } | null)?.name === "NotAllowedError") {
+          blockedRef.current = true;
           setBlocked(true);
         }
       },
     );
   }, [active, muted, video.url]);
 
-  // Only the active slide judges itself — otherwise every offscreen video
-  // would report itself dead the moment its metadata failed to load.
+  // Only the active slide judges itself. Keep the grace timer tied to slide
+  // activation, not callback/render changes, so a watchdog re-arm cannot make
+  // a video that is already playing look like it never started.
   useEffect(() => {
     if (!active) {
-      clearTimers();
+      clearStartTimer();
       return;
     }
     reported.current = false;
-    started.current = false;
-    lastTick.current = performance.now();
+    blockedRef.current = false;
+    setBlocked(false);
 
     startTimer.current = window.setTimeout(() => {
       startTimer.current = null;
-      if (!started.current) reportUnplayable();
+      reportUnplayable("start-timeout");
     }, START_GRACE_MS);
 
-    stallCheck.current = window.setInterval(() => {
-      if (!started.current) return;
-      if (performance.now() - lastTick.current > STALL_AFTER_MS) reportUnplayable();
-    }, 2000);
-
-    return () => clearTimers();
-  }, [active, clearTimers, reportUnplayable, video.url]);
+    return () => clearStartTimer();
+  }, [active, clearStartTimer, reportUnplayable, video.url]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -310,7 +310,10 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
             const el = videoRef.current;
             if (!el) return;
             void el.play().then(
-              () => setBlocked(false),
+              () => {
+                blockedRef.current = false;
+                setBlocked(false);
+              },
               () => undefined,
             );
           }}
