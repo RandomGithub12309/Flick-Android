@@ -21,6 +21,7 @@ export function Feed() {
   const prev = useFlick((s) => s.prev);
   const reroll = useFlick((s) => s.reroll);
   const toggleMuted = useFlick((s) => s.toggleMuted);
+  const setMuted = useFlick((s) => s.setMuted);
   const signOut = useFlick((s) => s.signOut);
   const setScreen = useFlick((s) => s.setScreen);
 
@@ -85,6 +86,11 @@ export function Feed() {
       snap(1);
     }, SKIP_SETTLE_MS);
   }, [snap]);
+
+  // If the browser refuses to start a video *with* sound, the slide plays it
+  // muted instead of skipping it — so flip the sound switch to match, and a
+  // tap on it becomes the gesture that turns the audio back on.
+  const autoplayBlocked = useCallback(() => setMuted(true), [setMuted]);
 
   useEffect(() => {
     if (!skipNotice) return;
@@ -197,6 +203,7 @@ export function Feed() {
           drag={drag}
           animating={animating || startY.current != null}
           onUnplayable={item.kind === "video" ? skipUnplayable : undefined}
+          onAutoplayBlocked={item.kind === "video" ? autoplayBlocked : undefined}
         />
       ))}
 

@@ -1,9 +1,7 @@
 import { useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, Link2 } from "lucide-react";
 import type { FlickPost } from "@/lib/reddit/types";
-import { SpeedBar } from "@/components/speed-bar";
 import { VideoPlayer } from "@/components/video-player";
-import { useFlick } from "@/store/flick";
 import { cn, formatScore } from "@/lib/utils";
 
 type Props = {
@@ -14,13 +12,21 @@ type Props = {
   drag: number;
   animating: boolean;
   onUnplayable?: () => void;
+  onAutoplayBlocked?: () => void;
 };
 
-export function PostSlide({ post, active, muted, offset, drag, animating, onUnplayable }: Props) {
+export function PostSlide({
+  post,
+  active,
+  muted,
+  offset,
+  drag,
+  animating,
+  onUnplayable,
+  onAutoplayBlocked,
+}: Props) {
   const [progress, setProgress] = useState(0);
   const [galleryIndex, setGalleryIndex] = useState(0);
-  const playbackRate = useFlick((s) => s.playbackRate);
-  const setPlaybackRate = useFlick((s) => s.setPlaybackRate);
   const gallery = post.gallery ?? [];
   const image =
     post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
@@ -38,9 +44,9 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
           video={post.video}
           active={active}
           muted={muted}
-          playbackRate={playbackRate}
           onProgress={setProgress}
           onUnplayable={onUnplayable}
+          onAutoplayBlocked={onAutoplayBlocked}
         />
       ) : image ? (
         <img
@@ -72,17 +78,9 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
       <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-bg/80 via-transparent to-bg/35" />
 
       {post.kind === "video" ? (
-        <>
-          {/* Only the active slide gets the control — three overlapping
-              scrubbers would fight each other for the same gesture. */}
-          {active ? <SpeedBar rate={playbackRate} onChange={setPlaybackRate} /> : null}
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-fg/15">
-            <div
-              className="h-full bg-fg/40"
-              style={{ width: `${Math.min(100, progress * 100)}%` }}
-            />
-          </div>
-        </>
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-fg/15">
+          <div className="h-full bg-fg/40" style={{ width: `${Math.min(100, progress * 100)}%` }} />
+        </div>
       ) : null}
 
       {post.kind === "gallery" && gallery.length > 1 ? (

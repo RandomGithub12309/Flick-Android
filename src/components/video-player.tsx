@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FlickVideo } from "@/lib/reddit/types";
 
 /**
@@ -13,24 +13,51 @@ type Props = {
   video: FlickVideo;
   active: boolean;
   muted: boolean;
-  playbackRate: number;
   onProgress?: (ratio: number) => void;
   /** Fired once per activation when this video can't be played at all. */
   onUnplayable?: () => void;
+  /**
+   * Fired when the browser refused to start playback with sound (autoplay
+   * policy). The video keeps playing muted so the feed doesn't skip it, and
+   * the sound button reflects reality again.
+   */
+  onAutoplayBlocked?: () => void;
 };
+
+/** Autoplay with sound is a browser permission, not a media-availability problem. */
+function isAutoplayBlocked(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "NotAllowedError";
+}
 
 export function VideoPlayer({
   video,
   active,
   muted,
-  playbackRate,
   onProgress,
   onUnplayable,
+  onAutoplayBlocked,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const watchdog = useRef<number | null>(null);
   const reported = useRef(false);
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const [audioIndex, setAudioIndex] = useState(0);
+
+  /** The preferred file, then whatever the host can offer instead. */
+  const sources = useMemo(() => {
+    const list = [video.url, video.fallbackUrl].filter((url): url is string => Boolean(url));
+    return [...new Set(list)];
+  }, [video.fallbackUrl, video.url]);
+  const source = sources[sourceIndex];
+
+  /** Reddit renames its audio files, so try each known URL before giving up. */
+  const audioUrls = useMemo(() => {
+    const list = video.audioUrls?.length ? video.audioUrls : video.audioUrl ? [video.audioUrl] : [];
+    return [...new Set(list)];
+  }, [video.audioUrl, video.audioUrls]);
+
+  const audioUrl = audioUrls[audioIndex];
 
   const reportUnplayable = useCallback(() => {
     if (reported.current) return;
@@ -38,14 +65,28 @@ export function VideoPlayer({
     onUnplayable?.();
   }, [onUnplayable]);
 
+  /** Swaps in the next source, or reports that there is nothing left to try. */
+  const advanceSource = useCallback(() => {
+    if (sourceIndex + 1 >= sources.length) return false;
+    setSourceIndex(sourceIndex + 1);
+    return true;
+  }, [sourceIndex, sources.length]);
+
   const armWatchdog = useCallback(() => {
     if (watchdog.current !== null) window.clearTimeout(watchdog.current);
     watchdog.current = window.setTimeout(() => {
       const el = videoRef.current;
       // HAVE_FUTURE_DATA (3) or better means there is decodable media to show.
-      if (!el || el.readyState < 3 || el.paused) reportUnplayable();
+      const playing = el && el.readyState >= 3 && !el.paused;
+      // A source that hangs without erroring gets one swap too — a stalled CDN
+      // and a dead file look identical from here.
+      if (!playing && !advanceSource()) reportUnplayable();
     }, UNPLAYABLE_AFTER_MS);
-  }, [reportUnplayable]);
+  }, [advanceSource, reportUnplayable]);
+
+  const handleVideoError = useCallback(() => {
+    if (!advanceSource()) reportUnplayable();
+  }, [advanceSource, reportUnplayable]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -59,8 +100,15 @@ export function VideoPlayer({
       }
     };
 
+    const playAudio = () => {
+      if (!audio) return;
+      void audio.play().catch((error: unknown) => {
+        if (isAutoplayBlocked(error)) onAutoplayBlocked?.();
+      });
+    };
+
     const onPlay = () => {
-      void audio?.play().catch(() => undefined);
+      playAudio();
     };
     const onPause = () => {
       audio?.pause();
@@ -69,20 +117,45 @@ export function VideoPlayer({
       sync();
       if (el.duration > 0) onProgress?.(el.currentTime / el.duration);
     };
+    // The audio file starts at 0, so joining a video mid-playback (a fresh
+    // source, a swapped-in fallback) needs an explicit jump.
+    const onLoadedAudio = () => {
+      sync();
+      if (!el.paused) playAudio();
+    };
 
     el.addEventListener("play", onPlay);
     el.addEventListener("pause", onPause);
     el.addEventListener("timeupdate", onTime);
     el.addEventListener("seeked", sync);
-    el.addEventListener("error", reportUnplayable);
+    el.addEventListener("error", handleVideoError);
+    audio?.addEventListener("loadedmetadata", onLoadedAudio);
     return () => {
       el.removeEventListener("play", onPlay);
       el.removeEventListener("pause", onPause);
       el.removeEventListener("timeupdate", onTime);
       el.removeEventListener("seeked", sync);
-      el.removeEventListener("error", reportUnplayable);
+      el.removeEventListener("error", handleVideoError);
+      audio?.removeEventListener("loadedmetadata", onLoadedAudio);
     };
-  }, [onProgress, reportUnplayable, video.audioUrl]);
+  }, [handleVideoError, onAutoplayBlocked, onProgress, audioUrl, source]);
+
+  // A bad guess at the audio file name must not mark the video unplayable —
+  // move on to the next candidate instead.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onAudioError = () => {
+      setAudioIndex((index) => (index + 1 < audioUrls.length ? index + 1 : index));
+    };
+    audio.addEventListener("error", onAudioError);
+    return () => audio.removeEventListener("error", onAudioError);
+  }, [audioUrls.length, audioUrl]);
+
+  useEffect(() => {
+    setSourceIndex(0);
+    setAudioIndex(0);
+  }, [video.url]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -90,17 +163,22 @@ export function VideoPlayer({
     if (!el) return;
     el.muted = muted;
     if (audio) audio.muted = muted;
-    if (active) {
-      const play = () => {
-        void el.play().catch(() => undefined);
-        if (audio && !muted) void audio.play().catch(() => undefined);
-      };
-      play();
-    } else {
+    if (!active) {
       el.pause();
       audio?.pause();
+      return;
     }
-  }, [active, muted, video.url]);
+    void el.play().catch((error: unknown) => {
+      if (!isAutoplayBlocked(error)) return;
+      // Playback with sound needs a real gesture on some browsers (and the
+      // desktop web build has no native shell to lift that). Play muted rather
+      // than skipping, and let the sound button tell the truth.
+      onAutoplayBlocked?.();
+      el.muted = true;
+      if (audio) audio.muted = true;
+      void el.play().catch(() => undefined);
+    });
+  }, [active, muted, onAutoplayBlocked, audioUrl, source]);
 
   // Only the active slide runs a watchdog — otherwise every offscreen video
   // would report itself unplayable the moment its metadata failed to load.
@@ -120,21 +198,13 @@ export function VideoPlayer({
         watchdog.current = null;
       }
     };
-  }, [active, armWatchdog, video.url]);
-
-  useEffect(() => {
-    const el = videoRef.current;
-    const audio = audioRef.current;
-    if (!el) return;
-    el.playbackRate = playbackRate;
-    if (audio) audio.playbackRate = playbackRate;
-  }, [playbackRate, video.audioUrl, video.url]);
+  }, [active, armWatchdog, source, video.url]);
 
   return (
     <>
       <video
         ref={videoRef}
-        src={video.url}
+        src={source}
         className="absolute inset-0 size-full object-cover"
         playsInline
         loop
@@ -148,13 +218,8 @@ export function VideoPlayer({
           }
         }}
       />
-      {video.audioUrl ? (
-        <audio
-          ref={audioRef}
-          src={video.audioUrl}
-          loop
-          preload={active ? "auto" : "none"}
-        />
+      {audioUrl ? (
+        <audio ref={audioRef} src={audioUrl} loop preload={active ? "auto" : "none"} />
       ) : null}
     </>
   );
