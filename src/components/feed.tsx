@@ -21,7 +21,6 @@ export function Feed() {
   const prev = useFlick((s) => s.prev);
   const reroll = useFlick((s) => s.reroll);
   const toggleMuted = useFlick((s) => s.toggleMuted);
-  const setMuted = useFlick((s) => s.setMuted);
   const signOut = useFlick((s) => s.signOut);
   const setScreen = useFlick((s) => s.setScreen);
 
@@ -38,7 +37,12 @@ export function Feed() {
   const post = posts[index];
 
   const snap = useCallback(
-    (dir: -1 | 0 | 1) => {
+    (dir: -1 | 0 | 1, auto = false) => {
+      // Only deliberate navigation clears the run. An automatic skip changes
+      // the index as well, so resetting the counter on the index made the cap
+      // unreachable — every skip erased the evidence of the one before it and
+      // a dead feed could blur through itself forever.
+      if (!auto) skips.current = 0;
       setAnimating(true);
       if (dir === 1) {
         setDrag(-window.innerHeight);
@@ -83,14 +87,9 @@ export function Feed() {
     skipTimer.current = window.setTimeout(() => {
       skipTimer.current = null;
       setSkipNotice("Skipped — couldn't play that one");
-      snap(1);
+      snap(1, true);
     }, SKIP_SETTLE_MS);
   }, [snap]);
-
-  // If the browser refuses to start a video *with* sound, the slide plays it
-  // muted instead of skipping it — so flip the sound switch to match, and a
-  // tap on it becomes the gesture that turns the audio back on.
-  const autoplayBlocked = useCallback(() => setMuted(true), [setMuted]);
 
   useEffect(() => {
     if (!skipNotice) return;
@@ -106,11 +105,6 @@ export function Feed() {
       }
     };
   }, [skipNotice]);
-
-  // Any deliberate navigation means the feed is healthy again.
-  useEffect(() => {
-    skips.current = 0;
-  }, [index]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -202,8 +196,9 @@ export function Feed() {
           offset={offset}
           drag={drag}
           animating={animating || startY.current != null}
-          onUnplayable={item.kind === "video" ? skipUnplayable : undefined}
-          onAutoplayBlocked={item.kind === "video" ? autoplayBlocked : undefined}
+          onUnplayable={
+            offset === 0 && !animating && item.kind === "video" ? skipUnplayable : undefined
+          }
         />
       ))}
 

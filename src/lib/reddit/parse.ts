@@ -275,8 +275,11 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
 
   let kind: FlickPost["kind"] = "link";
   let image: FlickImage | undefined;
-  if (video) kind = "video";
-  else if (gallery && gallery.length > 0) {
+  if (video) {
+    kind = "video";
+    // Preview still is the letterbox backdrop when the clip is landscape.
+    image = previewImage;
+  } else if (gallery && gallery.length > 0) {
     kind = "gallery";
     image = gallery[0];
   } else if (directImage) {

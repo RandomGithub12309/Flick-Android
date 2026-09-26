@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, Link2 } from "lucide-react";
 import type { FlickPost } from "@/lib/reddit/types";
+import { SeekBar } from "@/components/seek-bar";
 import { VideoPlayer } from "@/components/video-player";
-import { cn, formatScore } from "@/lib/utils";
+import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
+import { cn, formatScore, isLandscapeRatio, mediaRatio } from "@/lib/utils";
 
 type Props = {
   post: FlickPost;
@@ -12,24 +14,23 @@ type Props = {
   drag: number;
   animating: boolean;
   onUnplayable?: () => void;
-  onAutoplayBlocked?: () => void;
 };
 
-export function PostSlide({
-  post,
-  active,
-  muted,
-  offset,
-  drag,
-  animating,
-  onUnplayable,
-  onAutoplayBlocked,
-}: Props) {
-  const [progress, setProgress] = useState(0);
+export function PostSlide({ post, active, muted, offset, drag, animating, onUnplayable }: Props) {
+  const [playback, setPlayback] = useState<PlaybackInfo>({
+    ratio: null,
+    buffered: null,
+    current: 0,
+    duration: 0,
+  });
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const videoRef = useRef<VideoHandle>(null);
   const gallery = post.gallery ?? [];
   const image =
     post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
+  const poster = post.image?.url ?? post.thumbnail;
+  const landscapeVideo = isLandscapeRatio(mediaRatio(post.video?.width, post.video?.height));
+  const landscapeImage = isLandscapeRatio(mediaRatio(image?.width, image?.height));
 
   return (
     <article
@@ -41,20 +42,35 @@ export function PostSlide({
     >
       {post.kind === "video" && post.video ? (
         <VideoPlayer
+          ref={videoRef}
           video={post.video}
           active={active}
           muted={muted}
-          onProgress={setProgress}
+          poster={poster}
+          onProgress={setPlayback}
           onUnplayable={onUnplayable}
-          onAutoplayBlocked={onAutoplayBlocked}
         />
       ) : image ? (
-        <img
-          src={image.url}
-          alt={post.title}
-          className="absolute inset-0 size-full object-cover outline outline-1 -outline-offset-1 outline-fg/10"
-          draggable={false}
-        />
+        <>
+          {landscapeImage ? (
+            <img
+              src={image.url}
+              alt=""
+              aria-hidden
+              draggable={false}
+              className="absolute inset-0 size-full object-cover opacity-70 blur-2xl scale-125"
+            />
+          ) : null}
+          <img
+            src={image.url}
+            alt={post.title}
+            className={cn(
+              "absolute inset-0 size-full outline outline-1 -outline-offset-1 outline-fg/10",
+              landscapeImage ? "object-contain" : "object-cover",
+            )}
+            draggable={false}
+          />
+        </>
       ) : (
         <div className="absolute inset-0 flex flex-col justify-end bg-surface px-5 pb-32 pt-safe">
           <div className="mb-4 text-subtle">
@@ -75,13 +91,14 @@ export function PostSlide({
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-bg/80 via-transparent to-bg/35" />
-
-      {post.kind === "video" ? (
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-fg/15">
-          <div className="h-full bg-fg/40" style={{ width: `${Math.min(100, progress * 100)}%` }} />
-        </div>
-      ) : null}
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-0",
+          landscapeVideo
+            ? "bg-linear-to-t from-bg/85 from-20% via-transparent to-transparent"
+            : "bg-linear-to-t from-bg/80 via-transparent to-bg/35",
+        )}
+      />
 
       {post.kind === "gallery" && gallery.length > 1 ? (
         <div className="absolute inset-x-0 top-1/2 z-10 flex -translate-y-1/2 justify-between px-2">
@@ -107,6 +124,17 @@ export function PostSlide({
       ) : null}
 
       <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-safe pt-16">
+        {/* Only the active slide gets the control — three overlapping
+            scrubbers would fight each other for the same gesture. */}
+        {post.kind === "video" && active ? (
+          <SeekBar
+            ratio={playback.ratio}
+            buffered={playback.buffered}
+            current={playback.current}
+            duration={playback.duration}
+            onSeek={(ratio) => videoRef.current?.seek(ratio)}
+          />
+        ) : null}
         <div className="max-w-xs pb-6 pr-4">
           <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium text-fg">
             <span className="rounded-full bg-fg/12 px-2.5 py-1">r/{post.subreddit}</span>

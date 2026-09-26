@@ -30,7 +30,13 @@ export function ConnectForm() {
   const [clientId, setClientId] = useState("");
   const [busy, setBusy] = useState(false);
   const [help, setHelp] = useState(() => isNative());
-  const oauthRedirect = useMemo(() => redirectUri(), []);
+  const override = useFlick((s) => s.redditRedirectUri);
+  const setOverride = useFlick((s) => s.setRedditRedirectUri);
+  const [showOverride, setShowOverride] = useState(() => Boolean(useFlick.getState().redditRedirectUri));
+  const defaultRedirect = useMemo(() => redirectUri(), []);
+  // A pasted value wins, because Reddit only accepts the exact string already
+  // registered on the app — which is not always one Flick chose.
+  const oauthRedirect = override || defaultRedirect;
 
   async function authorizeInBrowser() {
     if (!clientId.trim()) {
@@ -119,8 +125,37 @@ export function ConnectForm() {
             required
             autoCapitalize="off"
             spellCheck={false}
+            placeholder="Paste the ID under the app name"
           />
         </div>
+
+        {showOverride ? (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="redirect">Redirect URI already on your app</Label>
+            <Input
+              id="redirect"
+              value={override}
+              onChange={(e) => setOverride(e.target.value)}
+              placeholder={defaultRedirect || "flick://oauth"}
+              autoCapitalize="off"
+              spellCheck={false}
+            />
+            <p className="text-xs leading-normal text-subtle">
+              Reddit only accepts the exact redirect URI already registered on that app. Paste
+              whatever is listed there — if it leaves Flick, the code never comes back. Leave blank
+              to use Flick&rsquo;s own:{" "}
+              <span className="break-all text-muted">{defaultRedirect}</span>
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="self-start text-left text-xs text-muted underline-offset-4 hover:underline"
+            onClick={() => setShowOverride(true)}
+          >
+            Reusing an app whose redirect URI I can&rsquo;t change
+          </button>
+        )}
 
         {error ? <p className="text-sm text-danger">{error}</p> : null}
 
@@ -173,6 +208,11 @@ export function ConnectForm() {
               own page showing <span className="text-fg">{"{}"}</span> and never returns to Flick.
             </li>
             <li>Copy the ID under the app name into the field above.</li>
+            <li>
+              Already have an <span className="text-fg">installed app</span> you can&rsquo;t edit?
+              Use the option above to paste its existing redirect URI. Flick sends whatever you put
+              there, which is the only value Reddit will accept for that app.
+            </li>
           </ol>
         ) : null}
         <p className="mt-auto text-xs leading-normal text-subtle">
