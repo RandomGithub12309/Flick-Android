@@ -1,16 +1,51 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { FlickVideo } from "@/lib/reddit/types";
+
+/**
+ * A video is treated as unplayable if it errors, or if it hasn't actually
+ * started after this long. Reddit serves a lot of dead `v.redd.it` and
+ * redgifs links (404, geo-blocked, removed), and those would otherwise sit on
+ * screen as a frozen frame forever.
+ */
+const UNPLAYABLE_AFTER_MS = 8000;
 
 type Props = {
   video: FlickVideo;
   active: boolean;
   muted: boolean;
+  playbackRate: number;
   onProgress?: (ratio: number) => void;
+  /** Fired once per activation when this video can't be played at all. */
+  onUnplayable?: () => void;
 };
 
-export function VideoPlayer({ video, active, muted, onProgress }: Props) {
+export function VideoPlayer({
+  video,
+  active,
+  muted,
+  playbackRate,
+  onProgress,
+  onUnplayable,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const watchdog = useRef<number | null>(null);
+  const reported = useRef(false);
+
+  const reportUnplayable = useCallback(() => {
+    if (reported.current) return;
+    reported.current = true;
+    onUnplayable?.();
+  }, [onUnplayable]);
+
+  const armWatchdog = useCallback(() => {
+    if (watchdog.current !== null) window.clearTimeout(watchdog.current);
+    watchdog.current = window.setTimeout(() => {
+      const el = videoRef.current;
+      // HAVE_FUTURE_DATA (3) or better means there is decodable media to show.
+      if (!el || el.readyState < 3 || el.paused) reportUnplayable();
+    }, UNPLAYABLE_AFTER_MS);
+  }, [reportUnplayable]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -39,13 +74,15 @@ export function VideoPlayer({ video, active, muted, onProgress }: Props) {
     el.addEventListener("pause", onPause);
     el.addEventListener("timeupdate", onTime);
     el.addEventListener("seeked", sync);
+    el.addEventListener("error", reportUnplayable);
     return () => {
       el.removeEventListener("play", onPlay);
       el.removeEventListener("pause", onPause);
       el.removeEventListener("timeupdate", onTime);
       el.removeEventListener("seeked", sync);
+      el.removeEventListener("error", reportUnplayable);
     };
-  }, [onProgress, video.audioUrl]);
+  }, [onProgress, reportUnplayable, video.audioUrl]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -65,6 +102,34 @@ export function VideoPlayer({ video, active, muted, onProgress }: Props) {
     }
   }, [active, muted, video.url]);
 
+  // Only the active slide runs a watchdog — otherwise every offscreen video
+  // would report itself unplayable the moment its metadata failed to load.
+  useEffect(() => {
+    if (!active) {
+      if (watchdog.current !== null) {
+        window.clearTimeout(watchdog.current);
+        watchdog.current = null;
+      }
+      return;
+    }
+    reported.current = false;
+    armWatchdog();
+    return () => {
+      if (watchdog.current !== null) {
+        window.clearTimeout(watchdog.current);
+        watchdog.current = null;
+      }
+    };
+  }, [active, armWatchdog, video.url]);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    const audio = audioRef.current;
+    if (!el) return;
+    el.playbackRate = playbackRate;
+    if (audio) audio.playbackRate = playbackRate;
+  }, [playbackRate, video.audioUrl, video.url]);
+
   return (
     <>
       <video
@@ -76,6 +141,12 @@ export function VideoPlayer({ video, active, muted, onProgress }: Props) {
         autoPlay={active}
         muted={muted}
         preload={active ? "auto" : "metadata"}
+        onPlaying={() => {
+          if (watchdog.current !== null) {
+            window.clearTimeout(watchdog.current);
+            watchdog.current = null;
+          }
+        }}
       />
       {video.audioUrl ? (
         <audio

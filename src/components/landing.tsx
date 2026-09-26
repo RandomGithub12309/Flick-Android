@@ -20,20 +20,30 @@ export function Landing() {
   const session = useFlick((s) => s.session);
   const error = useFlick((s) => s.error);
   const [busy, setBusy] = useState(false);
-  const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(
-    null,
-  );
+  const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [standalone, setStandalone] = useState(false);
 
   useEffect(() => {
     const media = window.matchMedia("(display-mode: standalone)");
-    setStandalone(media.matches || (navigator as Navigator & { standalone?: boolean }).standalone === true);
+    setStandalone(
+      media.matches || (navigator as Navigator & { standalone?: boolean }).standalone === true,
+    );
     const onPrompt = (e: Event) => {
       e.preventDefault();
       setInstallEvent(e as BeforeInstallPromptEvent);
     };
+    // The event is single-use: once the prompt has been shown, Chrome won't
+    // fire it again, so clear it and treat the install as done.
+    const onInstalled = () => {
+      setInstallEvent(null);
+      setStandalone(true);
+    };
     window.addEventListener("beforeinstallprompt", onPrompt);
-    return () => window.removeEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
   }, []);
 
   async function playDemo() {
@@ -95,7 +105,7 @@ export function Landing() {
       <div className="relative z-10 mx-auto flex w-full max-w-md flex-1 flex-col">
         <div className="flex-1 pt-12">
           <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted">
-            Android player
+            Saved-post player
           </p>
           <h1 className="mt-4 text-6xl font-semibold tracking-tight text-fg">
             Flick
@@ -149,10 +159,25 @@ export function Landing() {
               size="md"
               variant="ghost"
               className="w-full"
-              onClick={() => void installEvent.prompt()}
+              onClick={() => {
+                const event = installEvent;
+                setInstallEvent(null);
+                void event.prompt();
+              }}
             >
-              Install on this phone
+              Install Flick
             </Button>
+          ) : !standalone ? (
+            // iOS Safari never fires beforeinstallprompt, and desktop Chrome
+            // only fires it once the app is installable — so always give the
+            // manual route rather than showing nothing at all.
+            <p className="px-1 text-center text-xs leading-relaxed text-subtle">
+              Add it to your home screen:{" "}
+              <span className="text-fg">
+                Share → Add to Home Screen
+              </span>{" "}
+              on iPhone, or the install icon in the address bar on desktop.
+            </p>
           ) : null}
         </div>
       </div>

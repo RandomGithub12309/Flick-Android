@@ -37,11 +37,26 @@ async function redditForm(
 
 function humanRedditAuthError(msg: string): string {
   const key = msg.toLowerCase();
-  if (key.includes("invalid_grant") || key.includes("wrong_password")) {
-    return "Reddit rejected that username or password. Accounts with two-factor auth need Authorize instead.";
+  // Flick is a public client: it sends no client secret, which is only valid
+  // for an "installed app". A "script"/"web app" has a secret and Reddit
+  // rejects the bare client id — the most common setup mistake by far.
+  if (key.includes("invalid_client") || key.includes("unauthorized") || key.includes("401")) {
+    return (
+      "Reddit rejected the app. At reddit.com/prefs/apps the type must be " +
+      '"installed app" — not "script" or "web app". Flick never asks for a client secret.'
+    );
   }
-  if (key.includes("401") || key.includes("unauthorized") || key.includes("invalid_client")) {
-    return "Reddit app ID is wrong. Open reddit.com/prefs/apps and copy it again.";
+  // An authorization code is single-use, and Reddit also rejects it when the
+  // redirect_uri at exchange time differs from the one at authorize time.
+  if (
+    key.includes("invalid_grant") ||
+    key.includes("wrong_password") ||
+    key.includes("unsupported_grant_type")
+  ) {
+    return (
+      "Reddit rejected that authorization. It expires after one use — tap Authorize again, " +
+      "and check the redirect URI on your app matches exactly."
+    );
   }
   return `Reddit sign-in failed: ${msg}`;
 }

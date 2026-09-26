@@ -157,8 +157,13 @@ export function renderInstallPageHtml(template, { host, url } = {}) {
     .replaceAll("{{APP_URL}}", escapeHtml(stripInstallParams(url)));
 }
 
-export function renderWebManifest(hostHeader) {
-  const name = appNameFromHost(hostHeader);
+export function renderWebManifest(hostHeader, siteTitle = "") {
+  // Published .grok.me hosts encode their name in the first label; every other
+  // host (custom domain, Vercel alias) falls back to the site's own title so
+  // the installed app isn't called "Grok App".
+  const fromHost = appNameFromHost(hostHeader);
+  const name =
+    fromHost !== DEFAULT_APP_NAME ? fromHost : String(siteTitle ?? "").trim() || DEFAULT_APP_NAME;
   return JSON.stringify(
     {
       name,
@@ -169,11 +174,26 @@ export function renderWebManifest(hostHeader) {
       display: "standalone",
       background_color: "#000000",
       theme_color: "#000000",
+      // Chrome only fires the install prompt when the manifest declares BOTH a
+      // 192x192 and a 512x512 PNG, so 180 alone is never enough.
       icons: [
         {
-          src: "/__grok/icon-180.png",
-          sizes: "180x180",
+          src: "/__grok/icon-192.png",
+          sizes: "192x192",
           type: "image/png",
+          purpose: "any",
+        },
+        {
+          src: "/__grok/icon-512.png",
+          sizes: "512x512",
+          type: "image/png",
+          purpose: "any",
+        },
+        {
+          src: "/__grok/icon-maskable-512.png",
+          sizes: "512x512",
+          type: "image/png",
+          purpose: "maskable",
         },
       ],
     },

@@ -477,7 +477,33 @@ test("renders the manifest with the per-app name", () => {
   const manifest = JSON.parse(renderWebManifest("wild-race.grok.me"));
   assert.equal(manifest.name, "Wild Race");
   assert.equal(manifest.short_name, "Wild Race");
-  assert.equal(manifest.icons[0].src, "/__grok/icon-180.png");
+  assert.equal(manifest.icons[0].src, "/__grok/icon-192.png");
+});
+
+// Chrome refuses the install prompt unless the manifest declares both a
+// 192x192 and a 512x512 PNG, and a maskable icon for Android launchers.
+test("manifest declares the icon sizes Chrome requires for install", () => {
+  const manifest = JSON.parse(renderWebManifest("wild-race.grok.me"));
+  const sizes = manifest.icons.map((i) => i.sizes);
+  assert.ok(sizes.includes("192x192"), "needs a 192x192 icon");
+  assert.ok(sizes.includes("512x512"), "needs a 512x512 icon");
+  assert.ok(
+    manifest.icons.some((i) => i.purpose === "maskable"),
+    "needs a maskable icon for Android",
+  );
+});
+
+// Custom domains and Vercel aliases aren't *.grok.me, so the host can't supply
+// a name — the site title must win over the "Grok App" sentinel.
+test("manifest falls back to the site title off a grok.me host", () => {
+  const manifest = JSON.parse(renderWebManifest("flick-android.vercel.app", "Flick"));
+  assert.equal(manifest.name, "Flick");
+  assert.equal(manifest.short_name, "Flick");
+});
+
+test("manifest without a site title still produces the sentinel name", () => {
+  const manifest = JSON.parse(renderWebManifest("flick-android.vercel.app"));
+  assert.equal(manifest.name, "Grok App");
 });
 
 // Tripwires: the deployed-app path only works if Nitro scans server/ — an
@@ -495,6 +521,12 @@ test("nitro middleware and its bundled assets exist", () => {
   assert.match(middleware, /virtual:grok-og-identity/);
   readFileSync(join(TEMPLATE_ROOT, "scripts/install-page.html"));
   readFileSync(join(TEMPLATE_ROOT, "public/__grok/icon-180.png"));
+  readFileSync(join(TEMPLATE_ROOT, "public/__grok/icon-192.png"));
+  readFileSync(join(TEMPLATE_ROOT, "public/__grok/icon-512.png"));
+  readFileSync(join(TEMPLATE_ROOT, "public/__grok/icon-maskable-512.png"));
+  // Chrome gates the install prompt on a registered service worker.
+  readFileSync(join(TEMPLATE_ROOT, "public/sw.js"));
+  readFileSync(join(TEMPLATE_ROOT, "public/sw-register.js"));
   readFileSync(join(TEMPLATE_ROOT, "public/__grok/install/styles.css"));
 });
 
