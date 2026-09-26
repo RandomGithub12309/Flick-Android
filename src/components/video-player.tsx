@@ -1,4 +1,12 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Play } from "lucide-react";
 import type { FlickVideo } from "@/lib/reddit/types";
 import { cn, containRect, isLandscapeRatio, mediaRatio } from "@/lib/utils";
@@ -35,7 +43,6 @@ type Props = {
   video: FlickVideo;
   active: boolean;
   muted: boolean;
-  playbackRate: number;
   /** Still frame used as a blurred fill behind letterboxed landscape clips. */
   poster?: string;
   onProgress?: (info: PlaybackInfo) => void;
@@ -44,7 +51,7 @@ type Props = {
 };
 
 export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
-  { video, active, muted, playbackRate, poster, onProgress, onUnplayable },
+  { video, active, muted, poster, onProgress, onUnplayable },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -62,6 +69,26 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   const [native, setNative] = useState({ w: video.width, h: video.height });
   const [measured, setMeasured] = useState(false);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const [audioIndex, setAudioIndex] = useState(0);
+
+  /**
+   * The preferred file first, then whatever else the post can play — a redgifs
+   * clip carries Reddit's own muted copy as `fallbackUrl`, for networks where
+   * the redgifs CDN is blocked.
+   */
+  const sources = useMemo(() => {
+    const list = [video.url, video.fallbackUrl].filter((url): url is string => Boolean(url));
+    return [...new Set(list)];
+  }, [video.fallbackUrl, video.url]);
+  const source = sources[sourceIndex];
+
+  /** Reddit renames its audio files, so try each known URL before giving up. */
+  const audioUrls = useMemo(() => {
+    const list = video.audioUrls?.length ? video.audioUrls : video.audioUrl ? [video.audioUrl] : [];
+    return [...new Set(list)];
+  }, [video.audioUrl, video.audioUrls]);
+  const audioUrl = audioUrls[audioIndex];
 
   const clearStartTimer = useCallback(() => {
     if (startTimer.current !== null) window.clearTimeout(startTimer.current);
@@ -88,9 +115,21 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     [clearStartTimer],
   );
 
+  /**
+   * Swap in the next source for this post, or report that there is nothing
+   * left to try. Returns whether a different file is now loading.
+   */
+  const advanceSource = useCallback(() => {
+    if (sourceIndex + 1 >= sources.length) return false;
+    setSourceIndex(sourceIndex + 1);
+    return true;
+  }, [sourceIndex, sources.length]);
+
   useEffect(() => {
     setNative({ w: video.width, h: video.height });
     setMeasured(false);
+    setSourceIndex(0);
+    setAudioIndex(0);
   }, [video.url, video.width, video.height]);
 
   useEffect(() => {
@@ -193,10 +232,38 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         syncAudio();
         publish();
       }),
-      on("error", () => reportUnplayable("error")),
+      on("error", () => {
+        if (!advanceSource()) reportUnplayable("error");
+      }),
     ];
-    return () => offs.forEach((off) => off());
-  }, [clearStartTimer, onProgress, reportUnplayable, video.audioUrl]);
+
+    // The audio file starts at 0, so joining a video that is already playing
+    // (a swapped-in candidate, a fallback source) needs an explicit jump.
+    const onLoadedAudio = () => {
+      if (!audio) return;
+      syncAudio();
+      if (!el.paused) void audio.play().catch(() => undefined);
+    };
+    audio?.addEventListener("loadedmetadata", onLoadedAudio);
+
+    return () => {
+      offs.forEach((off) => off());
+      audio?.removeEventListener("loadedmetadata", onLoadedAudio);
+    };
+  }, [advanceSource, audioUrl, clearStartTimer, onProgress, reportUnplayable, source]);
+
+  // A wrong guess at Reddit's audio file name must not write the post off —
+  // move on to the next candidate instead. The video keeps playing silently in
+  // the meantime, which beats skipping a post that is otherwise fine.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onAudioError = () => {
+      setAudioIndex((index) => (index + 1 < audioUrls.length ? index + 1 : index));
+    };
+    audio.addEventListener("error", onAudioError);
+    return () => audio.removeEventListener("error", onAudioError);
+  }, [audioUrl, audioUrls.length]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -225,7 +292,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         }
       },
     );
-  }, [active, muted, video.url]);
+  }, [active, muted, source, video.url]);
 
   // Only the active slide judges itself. Keep the grace timer tied to slide
   // activation, not callback/render changes, so a watchdog re-arm cannot make
@@ -241,19 +308,13 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
 
     startTimer.current = window.setTimeout(() => {
       startTimer.current = null;
-      reportUnplayable("start-timeout");
+      // A source that stalls and a file that is dead look identical from here,
+      // so the fallback gets one chance before the post is written off.
+      if (!advanceSource()) reportUnplayable("start-timeout");
     }, START_GRACE_MS);
 
     return () => clearStartTimer();
-  }, [active, clearStartTimer, reportUnplayable, video.url]);
-
-  useEffect(() => {
-    const el = videoRef.current;
-    const audio = audioRef.current;
-    if (!el) return;
-    el.playbackRate = playbackRate;
-    if (audio) audio.playbackRate = playbackRate;
-  }, [playbackRate, video.audioUrl, video.url]);
+  }, [active, advanceSource, clearStartTimer, reportUnplayable, video.url]);
 
   return (
     <div ref={stageRef} className="absolute inset-0 overflow-hidden bg-black">
@@ -273,7 +334,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       */}
       <video
         ref={videoRef}
-        src={video.url}
+        src={source}
         poster={poster}
         playsInline
         loop
@@ -323,8 +384,8 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
           </span>
         </button>
       ) : null}
-      {video.audioUrl ? (
-        <audio ref={audioRef} src={video.audioUrl} loop preload={active ? "auto" : "none"} />
+      {audioUrl ? (
+        <audio ref={audioRef} src={audioUrl} loop preload={active ? "auto" : "none"} />
       ) : null}
     </div>
   );

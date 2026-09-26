@@ -1,4 +1,4 @@
-import { parseListingChildren, parseRedditPost, redgifsIdFromUrl } from "./parse";
+import { parseListingChildren, parseRedditPost, redgifsIdFromPost } from "./parse";
 import type { FlickPost, SavedPage } from "./types";
 
 const USER_AGENT = "android:app.flick.saved:1.0.0 (by /u/flick-player)";
@@ -159,30 +159,88 @@ export async function fetchSavedPage(input: {
   return { posts, after: parsed.after, username: input.username };
 }
 
+const REDGIFS_UA =
+  "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36";
+
 type RedgifsAuth = { token: string; exp: number };
 let redgifsAuth: RedgifsAuth | null = null;
+let redgifsAuthRequest: Promise<string | null> | null = null;
+let redgifsAuthFailedAt = 0;
+const REDGIFS_AUTH_BACKOFF_MS = 60_000;
 
-async function getRedgifsToken(): Promise<string | null> {
-  if (redgifsAuth && redgifsAuth.exp > Date.now() + 10_000) return redgifsAuth.token;
+async function requestRedgifsToken(): Promise<string | null> {
   try {
     const res = await fetch("https://api.redgifs.com/v2/auth/temporary", {
       headers: {
         Origin: "https://www.redgifs.com",
         Referer: "https://www.redgifs.com/",
-        "User-Agent":
-          "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36",
+        "User-Agent": REDGIFS_UA,
       },
+      signal: AbortSignal.timeout(8000),
     });
     const json = (await res.json()) as { token?: string };
-    if (!json.token) return null;
+    if (!json.token) {
+      redgifsAuthFailedAt = Date.now();
+      return null;
+    }
     redgifsAuth = { token: json.token, exp: Date.now() + 6 * 60 * 60 * 1000 };
     return json.token;
   } catch {
+    redgifsAuthFailedAt = Date.now();
     return null;
   }
 }
 
-async function resolveRedgifs(id: string): Promise<{ url: string; hasAudio: boolean } | null> {
+/**
+ * A page of saved posts can resolve a few dozen clips at once, so the token is
+ * fetched once for all of them, and a failure backs off instead of firing one
+ * doomed auth request per clip.
+ */
+function getRedgifsToken(refresh = false): Promise<string | null> {
+  if (refresh) redgifsAuth = null;
+  else if (redgifsAuth && redgifsAuth.exp > Date.now() + 10_000) {
+    return Promise.resolve(redgifsAuth.token);
+  } else if (Date.now() - redgifsAuthFailedAt < REDGIFS_AUTH_BACKOFF_MS) {
+    return Promise.resolve(null);
+  }
+  redgifsAuthRequest ??= requestRedgifsToken().finally(() => {
+    redgifsAuthRequest = null;
+  });
+  return redgifsAuthRequest;
+}
+
+type RedgifsClip = {
+  url: string;
+  hasAudio: boolean;
+  width?: number;
+  height?: number;
+  duration?: number;
+};
+
+type RedgifsCacheEntry = { clip: RedgifsClip | null; at: number };
+const redgifsClips = new Map<string, RedgifsCacheEntry>();
+const REDGIFS_CACHE_LIMIT = 400;
+/** A miss is cached briefly: an outage must not mute a clip for the session. */
+const REDGIFS_MISS_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * Saved-lists repeat posts across pages and every viewer re-fetches the same
+ * feed, so a hit is cached for the life of the process (until the map is
+ * trimmed); a miss only long enough to keep a burst of duplicates from
+ * re-asking a redgifs that is having a bad minute.
+ */
+async function resolveRedgifs(id: string): Promise<RedgifsClip | null> {
+  const cached = redgifsClips.get(id);
+  if (cached && (cached.clip !== null || Date.now() - cached.at < REDGIFS_MISS_TTL_MS)) {
+    return cached.clip;
+  }
+  const clip = await fetchRedgifs(id);
+  if (redgifsClips.size >= REDGIFS_CACHE_LIMIT) redgifsClips.clear();
+  redgifsClips.set(id, { clip, at: Date.now() });
+  return clip;
+}
+
+async function fetchRedgifs(id: string, allowRetry = true): Promise<RedgifsClip | null> {
   const token = await getRedgifsToken();
   if (!token) return null;
   try {
@@ -192,72 +250,107 @@ async function resolveRedgifs(id: string): Promise<{ url: string; hasAudio: bool
         Origin: "https://www.redgifs.com",
         Referer: `https://www.redgifs.com/watch/${id}`,
         "X-CustomHeader": `https://www.redgifs.com/watch/${id}`,
-        "User-Agent":
-          "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36",
+        "User-Agent": REDGIFS_UA,
       },
+      signal: AbortSignal.timeout(8000),
     });
+    // Temporary tokens are invalidated server-side without warning; one retry
+    // with a brand new token is the difference between "no sound" and works.
+    if ((res.status === 401 || res.status === 403) && allowRetry) {
+      const fresh = await getRedgifsToken(true);
+      if (fresh) return await fetchRedgifs(id, false);
+      return null;
+    }
     if (!res.ok) return null;
     const json = (await res.json()) as {
-      gif?: { hasAudio?: boolean; urls?: { hd?: string; sd?: string } };
+      gif?: {
+        hasAudio?: boolean | number;
+        width?: number;
+        height?: number;
+        duration?: number;
+        urls?: { hd?: string; sd?: string };
+      };
     };
-    const url = json.gif?.urls?.hd || json.gif?.urls?.sd;
+    const gif = json.gif;
+    // `hd` is the full-quality mp4 and carries the clip's sound; `sd` is the
+    // mobile encode, used only when there is no HD master.
+    const url = gif?.urls?.hd || gif?.urls?.sd;
     if (!url) return null;
-    return { url, hasAudio: Boolean(json.gif?.hasAudio) };
+    return {
+      url,
+      hasAudio: Boolean(gif?.hasAudio),
+      width: gif?.width,
+      height: gif?.height,
+      duration: gif?.duration,
+    };
   } catch {
     return null;
   }
 }
 
-function redgifsIdForPost(post: FlickPost): string | undefined {
-  const candidates = [post.sourceUrl, post.permalink, post.thumbnail, post.domain].filter(
-    (v): v is string => Boolean(v),
-  );
-  for (const c of candidates) {
-    const id = redgifsIdFromUrl(c);
-    if (id) return id;
-  }
-  return undefined;
+/**
+ * Runs `fn` over `items` with a bounded number of requests in flight — a saved
+ * page can hold a hundred posts, and doing their lookups strictly one at a
+ * time is what made the loading screen crawl.
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await fn(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
+/**
+ * Reddit keeps a muted copy of most redgifs clips — a `reddit_video_preview`
+ * on link posts, or a mirrored v.redd.it upload — and that copy is what the
+ * feed used to play: silent, lower resolution, and not the clip that was
+ * posted. Whenever a post carries a redgifs id the real clip wins, even if
+ * Reddit already handed us a playable video. Reddit's copy stays in place as
+ * the fallback for clips redgifs no longer serves (deleted, private, API down).
+ */
 async function resolveExternalVideos(posts: FlickPost[]): Promise<FlickPost[]> {
-  const out: FlickPost[] = [];
-  for (const post of posts) {
-    if (post.video) {
-      out.push(post);
-      continue;
-    }
-    const gifId = redgifsIdForPost(post);
-    if (gifId) {
-      const resolved = await resolveRedgifs(gifId);
-      if (resolved) {
-        out.push({
-          ...post,
-          kind: "video",
-          video: {
-            url: resolved.url,
-            width: 720,
-            height: 1280,
-            hasAudio: resolved.hasAudio,
-          },
-        });
-        continue;
-      }
-    }
-    out.push(post);
-  }
-  return out;
+  return await mapWithConcurrency(posts, 6, async (post): Promise<FlickPost> => {
+    // Only a video, or a link whose destination is the clip, is really "sourced
+    // by redgifs". An image or gallery post that merely credits one in its
+    // title should keep showing what it actually is.
+    if (post.kind !== "video" && post.kind !== "link") return post;
+    const gifId = redgifsIdFromPost(post);
+    if (!gifId) return post;
+    const clip = await resolveRedgifs(gifId);
+    if (!clip) return post;
+    return {
+      ...post,
+      kind: "video",
+      redgifsId: gifId,
+      video: {
+        // Redgifs muxes the sound into the mp4, so there is no audio sidecar.
+        url: clip.url,
+        // Where the redgifs CDN can't be reached, Reddit's own copy still plays
+        // (silently) rather than the feed skipping the post.
+        fallbackUrl: post.video?.url,
+        width: clip.width ?? post.video?.width ?? 720,
+        height: clip.height ?? post.video?.height ?? 1280,
+        duration: clip.duration ?? post.video?.duration,
+        hasAudio: clip.hasAudio,
+      },
+    };
+  });
 }
 
 type CacheEntry = { at: number; posts: FlickPost[] };
 let demoCache: CacheEntry | null = null;
 
-const DEMO_SUBS = [
-  "Unexpected",
-  "nextfuckinglevel",
-  "Damnthatsinteresting",
-  "nsfw",
-  "NSFW_GIF",
-];
+const DEMO_SUBS = ["Unexpected", "nextfuckinglevel", "Damnthatsinteresting", "nsfw", "NSFW_GIF"];
 
 export async function fetchDemoFeed(): Promise<FlickPost[]> {
   if (demoCache && Date.now() - demoCache.at < 8 * 60 * 1000) {

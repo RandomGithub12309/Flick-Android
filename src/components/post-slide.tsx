@@ -2,10 +2,8 @@ import { useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, Link2 } from "lucide-react";
 import type { FlickPost } from "@/lib/reddit/types";
 import { SeekBar } from "@/components/seek-bar";
-import { SpeedBar } from "@/components/speed-bar";
 import { VideoPlayer } from "@/components/video-player";
 import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
-import { useFlick } from "@/store/flick";
 import { cn, formatScore, isLandscapeRatio, mediaRatio } from "@/lib/utils";
 
 type Props = {
@@ -27,8 +25,6 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
   });
   const [galleryIndex, setGalleryIndex] = useState(0);
   const videoRef = useRef<VideoHandle>(null);
-  const playbackRate = useFlick((s) => s.playbackRate);
-  const setPlaybackRate = useFlick((s) => s.setPlaybackRate);
   const gallery = post.gallery ?? [];
   const image =
     post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
@@ -50,7 +46,6 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
           video={post.video}
           active={active}
           muted={muted}
-          playbackRate={playbackRate}
           poster={poster}
           onProgress={setPlayback}
           onUnplayable={onUnplayable}
@@ -104,10 +99,6 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
             : "bg-linear-to-t from-bg/80 via-transparent to-bg/35",
         )}
       />
-
-      {post.kind === "video" && active ? (
-        <SpeedBar rate={playbackRate} onChange={setPlaybackRate} />
-      ) : null}
 
       {post.kind === "gallery" && gallery.length > 1 ? (
         <div className="absolute inset-x-0 top-1/2 z-10 flex -translate-y-1/2 justify-between px-2">

@@ -1,13 +1,10 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { clampPlaybackRate } from "@/lib/reddit/playback-rate";
 import type { FlickPost, RedditSession } from "@/lib/reddit/types";
 import { shuffleInPlace } from "@/lib/utils";
 
 export type Screen = "home" | "connect" | "loading" | "feed";
 export type FeedSource = "saved" | "demo";
-
-export { MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE } from "@/lib/reddit/playback-rate";
 
 type FlickState = {
   ageOk: boolean;
@@ -28,8 +25,6 @@ type FlickState = {
   posts: FlickPost[];
   index: number;
   muted: boolean;
-  /** Playback rate applied to every video, dragged via the speed bar. */
-  playbackRate: number;
   loadingLabel: string;
   loadingCount: number;
   error: string | null;
@@ -45,7 +40,6 @@ type FlickState = {
   prev: () => void;
   reroll: () => void;
   toggleMuted: () => void;
-  setPlaybackRate: (rate: number) => void;
   signOut: () => void;
 };
 
@@ -60,7 +54,6 @@ export const useFlick = create<FlickState>()(
       posts: [],
       index: 0,
       muted: false,
-      playbackRate: 1,
       loadingLabel: "",
       loadingCount: 0,
       error: null,
@@ -108,7 +101,6 @@ export const useFlick = create<FlickState>()(
         set({ index: next });
       },
       toggleMuted: () => set({ muted: !get().muted }),
-      setPlaybackRate: (rate) => set({ playbackRate: clampPlaybackRate(rate) }),
       signOut: () =>
         set({
           session: null,
@@ -125,7 +117,6 @@ export const useFlick = create<FlickState>()(
         ageOk: state.ageOk,
         session: state.session,
         muted: state.muted,
-        playbackRate: state.playbackRate,
         redditRedirectUri: state.redditRedirectUri,
       }),
     },
