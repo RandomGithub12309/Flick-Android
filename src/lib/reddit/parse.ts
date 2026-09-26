@@ -144,6 +144,38 @@ function isUnsafeMinorContent(title: string, subreddit: string): boolean {
 }
 
 /**
+ * `media.redgifs.com` serves the clip files themselves, and their names are the
+ * clip id in CamelCase with a variant suffix: `ZealousGreenShark.mp4`,
+ * `…-mobile.mp4`, `…-silent.mp4`, `…-poster.jpg`. Reddit thumbnails of a
+ * redgifs link often point straight at the `-mobile.jpg`, so this is another
+ * way to recover the id for a post whose `url` is not a watch link.
+ */
+const REDGIFS_MEDIA_FILE =
+  /\/([A-Za-z0-9]+)(?:-(?:mobile|silent|hd|medium|poster|thumbnail|vthumbnail))?\.(mp4|webm|jpe?g)$/i;
+
+/**
+ * Recover a clip id from a redgifs *media* URL, e.g.
+ * `https://media.redgifs.com/ZealousGreenShark-mobile.mp4` -> `zealousgreenshark`.
+ */
+export function redgifsIdFromMediaUrl(url: string): string | undefined {
+  if (!/^https?:\/\/(?:[\w-]+\.)*redgifs\.com\//i.test(url)) return undefined;
+  const path = url.split(/[?#]/)[0];
+  const match = path.match(REDGIFS_MEDIA_FILE);
+  return match?.[1]?.toLowerCase();
+}
+
+/**
+ * A redgifs clip file used directly as a post's link — `…/Foo.mp4` plays as-is,
+ * and the `-silent` variant tells us there is no sound to fetch.
+ */
+export function redgifsMediaVideo(url: string): { url: string; hasAudio: boolean } | undefined {
+  if (!redgifsIdFromMediaUrl(url)) return undefined;
+  const path = url.split(/[?#]/)[0];
+  if (!/\.(?:mp4|webm)$/i.test(path)) return undefined;
+  return { url, hasAudio: !/-silent\.(?:mp4|webm)$/i.test(path) };
+}
+
+/**
  * A redgifs clip can be referenced from several places in a listing, and the
  * one that matters differs by post type: a plain link post carries it in
  * `url`, an embed carries it in the oembed iframe, a repost usually carries it
@@ -165,6 +197,9 @@ function redgifsIdFromRaw(
     add(record.title);
     add(record.selftext);
     add(record.domain);
+    // Link posts carry Reddit's own thumbnail, which for a redgifs link is
+    // frequently the clip's `-mobile.jpg` on the redgifs CDN.
+    add(record.thumbnail);
     for (const key of ["media", "secure_media"]) {
       add(asRecord(asRecord(record[key])?.oembed)?.html);
     }
@@ -176,7 +211,7 @@ function redgifsIdFromRaw(
   }
 
   for (const field of fields) {
-    const id = redgifsIdFromUrl(field);
+    const id = redgifsIdFromUrl(field) ?? redgifsIdFromMediaUrl(field);
     if (id) return id;
   }
   return undefined;
@@ -201,9 +236,11 @@ export function redgifsIdFromPost(post: FlickPost): string | undefined {
     post.domain,
     post.title,
     post.text,
+    post.image?.url,
+    post.video?.url,
   ].filter((value): value is string => Boolean(value));
   for (const candidate of candidates) {
-    const id = redgifsIdFromUrl(candidate);
+    const id = redgifsIdFromUrl(candidate) ?? redgifsIdFromMediaUrl(candidate);
     if (id) return id;
   }
   return undefined;
@@ -260,6 +297,19 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
       width: 720,
       height: 1280,
       hasAudio: true,
+    };
+  }
+
+  // A post that links a redgifs clip file directly (…/Foo.mp4, or the `-silent`
+  // cut) is a video in its own right. The id comes along with it, so the server
+  // can still upgrade it to the HD copy with sound when the API cooperates.
+  const redgifsMedia = url ? redgifsMediaVideo(url) : undefined;
+  if (!video && redgifsMedia) {
+    video = {
+      url: redgifsMedia.url,
+      width: 720,
+      height: 1280,
+      hasAudio: redgifsMedia.hasAudio,
     };
   }
 

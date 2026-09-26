@@ -1,4 +1,5 @@
 import { parseListingChildren, parseRedditPost, redgifsIdFromPost } from "./parse";
+import { audioCandidatesFor } from "../video-sources";
 import type { FlickPost, SavedPage } from "./types";
 
 const USER_AGENT = "android:app.flick.saved:1.0.0 (by /u/flick-player)";
@@ -209,7 +210,7 @@ function getRedgifsToken(refresh = false): Promise<string | null> {
   return redgifsAuthRequest;
 }
 
-type RedgifsClip = {
+export type RedgifsClip = {
   url: string;
   hasAudio: boolean;
   width?: number;
@@ -217,26 +218,71 @@ type RedgifsClip = {
   duration?: number;
 };
 
-type RedgifsCacheEntry = { clip: RedgifsClip | null; at: number };
+type RedgifsCacheEntry = { clip: RedgifsClip | null; exp: number };
 const redgifsClips = new Map<string, RedgifsCacheEntry>();
 const REDGIFS_CACHE_LIMIT = 400;
 /** A miss is cached briefly: an outage must not mute a clip for the session. */
 const REDGIFS_MISS_TTL_MS = 2 * 60 * 1000;
+const REDGIFS_HIT_TTL_MS = 6 * 60 * 60 * 1000;
+/** Refresh a signed link a minute before it dies rather than on the way out. */
+const REDGIFS_EXPIRY_SKEW_MS = 60 * 1000;
+
+/**
+ * Redgifs signs some CDN links (`…?expires=1693180042&signature=…`). Caching
+ * one for the life of the process meant a long-lived instance could keep
+ * handing out a URL that had since expired, and an expired URL is a video that
+ * errors and gets skipped — so the cache entry dies with the link.
+ */
+function mediaUrlExpiry(url: string): number | null {
+  const raw = url.match(/[?&]expires=(\d{9,})/)?.[1];
+  if (!raw) return null;
+  return Number(raw) * 1000;
+}
+
+function clipCacheExpiry(clip: RedgifsClip | null, now: number): number {
+  if (!clip) return now + REDGIFS_MISS_TTL_MS;
+  const signed = mediaUrlExpiry(clip.url);
+  const ttl = signed === null ? now + REDGIFS_HIT_TTL_MS : signed - REDGIFS_EXPIRY_SKEW_MS;
+  return Math.min(ttl, now + REDGIFS_HIT_TTL_MS);
+}
+
+/**
+ * Fresh lookups (the player retrying a clip that just failed on the device) are
+ * budgeted per process: this is a public server function, and without a cap it
+ * would be a free proxy for hammering the redgifs API.
+ */
+const REDGIFS_FRESH_PER_MINUTE = 120;
+let freshWindow = 0;
+let freshUsed = 0;
+
+function takeFreshBudget(now: number): boolean {
+  const window = Math.floor(now / 60_000);
+  if (window !== freshWindow) {
+    freshWindow = window;
+    freshUsed = 0;
+  }
+  if (freshUsed >= REDGIFS_FRESH_PER_MINUTE) return false;
+  freshUsed += 1;
+  return true;
+}
 
 /**
  * Saved-lists repeat posts across pages and every viewer re-fetches the same
- * feed, so a hit is cached for the life of the process (until the map is
- * trimmed); a miss only long enough to keep a burst of duplicates from
- * re-asking a redgifs that is having a bad minute.
+ * feed, so a hit is cached (until it expires or the map is trimmed) and a miss
+ * only briefly. `fresh` bypasses the cache for a player that is retrying.
  */
-async function resolveRedgifs(id: string): Promise<RedgifsClip | null> {
-  const cached = redgifsClips.get(id);
-  if (cached && (cached.clip !== null || Date.now() - cached.at < REDGIFS_MISS_TTL_MS)) {
-    return cached.clip;
-  }
-  const clip = await fetchRedgifs(id);
+export async function resolveRedgifsClip(
+  id: string,
+  options: { fresh?: boolean } = {},
+): Promise<RedgifsClip | null> {
+  const key = id.trim().toLowerCase();
+  const now = Date.now();
+  const cached = redgifsClips.get(key);
+  const fresh = options.fresh === true && takeFreshBudget(now);
+  if (!fresh && cached && now < cached.exp) return cached.clip;
+  const clip = await fetchRedgifs(key);
   if (redgifsClips.size >= REDGIFS_CACHE_LIMIT) redgifsClips.clear();
-  redgifsClips.set(id, { clip, at: Date.now() });
+  redgifsClips.set(key, { clip, exp: clipCacheExpiry(clip, Date.now()) });
   return clip;
 }
 
@@ -326,18 +372,21 @@ async function resolveExternalVideos(posts: FlickPost[]): Promise<FlickPost[]> {
     if (post.kind !== "video" && post.kind !== "link") return post;
     const gifId = redgifsIdFromPost(post);
     if (!gifId) return post;
-    const clip = await resolveRedgifs(gifId);
+    const clip = await resolveRedgifsClip(gifId);
     if (!clip) return post;
     return {
       ...post,
       kind: "video",
       redgifsId: gifId,
       video: {
-        // Redgifs muxes the sound into the mp4, so there is no audio sidecar.
+        // Redgifs muxes the sound into the mp4, so the primary source gets no
+        // audio sidecar — attaching one would play the clip's own audio twice.
         url: clip.url,
         // Where the redgifs CDN can't be reached, Reddit's own copy still plays
-        // (silently) rather than the feed skipping the post.
+        // rather than the feed skipping the post — and it keeps its own audio
+        // track, so the fallback is not the silent one.
         fallbackUrl: post.video?.url,
+        fallbackAudioUrls: audioCandidatesFor(post.video),
         width: clip.width ?? post.video?.width ?? 720,
         height: clip.height ?? post.video?.height ?? 1280,
         duration: clip.duration ?? post.video?.duration,

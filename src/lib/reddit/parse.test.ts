@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parseRedditPost, redgifsIdFromPost, redgifsIdFromUrl } from "./parse.ts";
+import {
+  parseRedditPost,
+  redgifsIdFromMediaUrl,
+  redgifsIdFromPost,
+  redgifsIdFromUrl,
+} from "./parse.ts";
 import type { FlickPost } from "./types.ts";
 
 /**
@@ -270,6 +275,60 @@ describe("redgifs ids", () => {
 
     assert.equal(post?.redgifsId, undefined);
     assert.equal(post && redgifsIdFromPost(post), undefined);
+  });
+
+  it("reads the clip id out of a redgifs media file name", () => {
+    // The media CDN names each file after the clip, CamelCased, with a variant
+    // suffix — so a thumbnail or a `-silent` link still identifies the clip.
+    assert.equal(
+      redgifsIdFromMediaUrl("https://media.redgifs.com/ZealousGreenShark.mp4"),
+      "zealousgreenshark",
+    );
+    assert.equal(
+      redgifsIdFromMediaUrl("https://media.redgifs.com/ZealousGreenShark-mobile.mp4"),
+      "zealousgreenshark",
+    );
+    assert.equal(
+      redgifsIdFromMediaUrl("https://media.redgifs.com/ZealousGreenShark-poster.jpg"),
+      "zealousgreenshark",
+    );
+    assert.equal(redgifsIdFromMediaUrl("https://i.imgur.com/abc.jpg"), undefined);
+    assert.equal(redgifsIdFromMediaUrl("https://www.redgifs.com/watch/abc"), undefined);
+  });
+
+  /**
+   * A post can *be* a redgifs clip file rather than a watch link. Reddit has no
+   * copy of those at all, so before this they were treated as plain links and
+   * never played.
+   */
+  it("treats a post that links a redgifs clip file as that video", () => {
+    const post = parseRedditPost(
+      listing({
+        url: "https://media.redgifs.com/ZealousGreenShark-mobile.mp4",
+        domain: "media.redgifs.com",
+        preview: {
+          images: [{ source: { url: "https://media.redgifs.com/ZealousGreenShark-mobile.jpg" } }],
+        },
+      }),
+    );
+
+    assert.equal(post?.kind, "video");
+    assert.equal(post?.video?.url, "https://media.redgifs.com/ZealousGreenShark-mobile.mp4");
+    assert.equal(post?.video?.hasAudio, true);
+    assert.equal(post?.redgifsId, "zealousgreenshark");
+  });
+
+  it("knows the -silent cut of a clip file has no sound", () => {
+    const post = parseRedditPost(
+      listing({
+        url: "https://media.redgifs.com/QuietPurpleMoose-silent.mp4",
+        domain: "media.redgifs.com",
+      }),
+    );
+
+    assert.equal(post?.kind, "video");
+    assert.equal(post?.video?.hasAudio, false);
+    assert.equal(post?.redgifsId, "quietpurplemoose");
   });
 
   it("prefers an id parsed off the payload over one guesses from the title", () => {

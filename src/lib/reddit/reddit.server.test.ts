@@ -271,6 +271,54 @@ describe("redgifs clips replace Reddit's muted copy", () => {
     );
   });
 
+  it("keeps Reddit's audio on the fallback, so a failed redgifs URL is not silent", async () => {
+    // The preview here is a normal upload with its own audio track, not the
+    // muted one — exactly the case where dropping the audio would leave the
+    // fallback playing nothing at all.
+    const withAudio = redgifsLinkPost("audiofallback", {
+      preview: {
+        reddit_video_preview: {
+          fallback_url: "https://v.redd.it/audiofallback/DASH_480.mp4?source=fallback",
+          width: 480,
+          height: 854,
+          has_audio: true,
+        },
+      },
+    });
+    stub([
+      [/oauth\.reddit\.com\/user/, () => tokenResponse(savedListing([withAudio]))],
+      [/api\.redgifs\.com\/v2\/auth\/temporary/, () => tokenResponse({ token: "rg-token" })],
+      [
+        /api\.redgifs\.com\/v2\/gifs\//,
+        () =>
+          tokenResponse({
+            gif: {
+              hasAudio: true,
+              urls: { hd: "https://media.redgifs.com/AudioFallback.mp4" },
+            },
+          }),
+      ],
+    ]);
+
+    const page = await fetchSavedPage({ accessToken: "at", username: "someone" });
+    const video = page.posts[0].video;
+
+    assert.equal(video?.url, "https://media.redgifs.com/AudioFallback.mp4");
+    assert.equal(
+      video?.fallbackUrl,
+      "https://v.redd.it/audiofallback/DASH_480.mp4?source=fallback",
+    );
+    // The fallback is video-only on Reddit, so its sound lives in the sidecar.
+    assert.ok(
+      video?.fallbackAudioUrls?.length,
+      "the fallback must keep an audio track, or it plays silent",
+    );
+    assert.match(video?.fallbackAudioUrls?.[0] ?? "", /audiofallback/);
+    // The primary is the redgifs mp4, which has its own sound — a sidecar here
+    // would double it.
+    assert.equal(video?.audioUrls, undefined);
+  });
+
   it("looks the clip up with a bearer token and an app User-Agent", async () => {
     stub(
       redgifsRoutes("happymagentafrog", {
@@ -362,6 +410,101 @@ describe("redgifs clips replace Reddit's muted copy", () => {
       calls.some((c) => c.url.includes("redgifs")),
       false,
     );
+  });
+
+  /**
+   * The player retries a clip whose URL failed on the device, and the cache is
+   * what decides whether that retry gets a genuinely new URL or the same dead
+   * one back.
+   */
+  it("serves an unsigned clip from cache instead of asking redgifs again", async () => {
+    stub(
+      redgifsRoutes("cacheableclip", {
+        gif: { hasAudio: true, urls: { hd: "https://media.redgifs.com/CacheableClip.mp4" } },
+      }),
+    );
+
+    const first = await fetchSavedPage({ accessToken: "at", username: "someone" });
+    const second = await fetchSavedPage({ accessToken: "at", username: "someone" });
+
+    assert.equal(first.posts[0].video?.url, "https://media.redgifs.com/CacheableClip.mp4");
+    assert.equal(second.posts[0].video?.url, "https://media.redgifs.com/CacheableClip.mp4");
+    const lookups = calls.filter((c) => c.url.includes("/v2/gifs/"));
+    assert.equal(lookups.length, 1, "second load should be answered from cache");
+  });
+
+  /**
+   * Signed links carry an `expires` stamp. Caching one past that stamp is a
+   * 403 on the device, which is a video that errors and gets skipped — so the
+   * cache entry has to die with the link.
+   */
+  it("re-resolves instead of serving a signed url that has already expired", async () => {
+    stub(
+      redgifsRoutes("expiringclip", {
+        gif: {
+          hasAudio: true,
+          urls: {
+            hd: "https://media.redgifs.com/ExpiringClip.mp4?expires=1000000000&signature=deadbeef",
+          },
+        },
+      }),
+    );
+
+    await fetchSavedPage({ accessToken: "at", username: "someone" });
+    await fetchSavedPage({ accessToken: "at", username: "someone" });
+
+    const lookups = calls.filter((c) => c.url.includes("/v2/gifs/"));
+    assert.equal(lookups.length, 2, "an expired link must not be reused");
+  });
+
+  it("plays a post that links a redgifs clip file, upgrading it to the HD copy", async () => {
+    stub([
+      [
+        /oauth\.reddit\.com\/user/,
+        () =>
+          tokenResponse(
+            savedListing([
+              {
+                kind: "t3",
+                data: {
+                  id: "media-post",
+                  name: "t3_media-post",
+                  title: "clip file",
+                  subreddit: "NSFW_GIF",
+                  author: "someone",
+                  permalink: "/r/NSFW_GIF/comments/media-post/clip_file/",
+                  // No Reddit-side copy at all: the link *is* the clip file,
+                  // and it is the `-silent` cut.
+                  url: "https://media.redgifs.com/ZealousGreenShark-silent.mp4",
+                  domain: "media.redgifs.com",
+                  over_18: true,
+                },
+              },
+            ]),
+          ),
+      ],
+      [/api\.redgifs\.com\/v2\/auth\/temporary/, () => tokenResponse({ token: "rg-token" })],
+      [
+        /api\.redgifs\.com\/v2\/gifs\//,
+        () =>
+          tokenResponse({
+            gif: {
+              hasAudio: true,
+              urls: { hd: "https://media.redgifs.com/ZealousGreenShark.mp4" },
+            },
+          }),
+      ],
+    ]);
+
+    const page = await fetchSavedPage({ accessToken: "at", username: "someone" });
+    const post = page.posts[0];
+
+    assert.equal(post.kind, "video");
+    // The HD copy with sound wins over the silent file the post linked to…
+    assert.equal(post.video?.url, "https://media.redgifs.com/ZealousGreenShark.mp4");
+    assert.equal(post.video?.hasAudio, true);
+    // …and the linked file stays as the fallback if redgifs' API is down.
+    assert.equal(post.video?.fallbackUrl, "https://media.redgifs.com/ZealousGreenShark-silent.mp4");
   });
 
   it("leaves a plain reddit upload alone, audio track included", async () => {

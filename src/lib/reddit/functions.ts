@@ -56,3 +56,27 @@ export const redditDemoFeed = createServerFn({ method: "POST" }).handler(async (
   const { fetchDemoFeed } = await import("./reddit.server");
   return fetchDemoFeed();
 });
+
+/**
+ * One-shot lookup of a redgifs clip, used when a slide has no playable file
+ * (the feed-level lookup failed, or the post is a bare link) or when playback
+ * of a resolved clip fails on the device — `fresh` skips the server's cache,
+ * because the URL that just failed is exactly the one a cached answer returns.
+ *
+ * The id is validated to the shape redgifs actually issues, since this is a
+ * public endpoint in front of a third-party API.
+ */
+export const redgifsClip = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      id: z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9]{4,64}$/i),
+      fresh: z.boolean().optional(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const { resolveRedgifsClip } = await import("./reddit.server");
+    return resolveRedgifsClip(data.id, { fresh: data.fresh });
+  });

@@ -11,6 +11,7 @@ import { Play } from "lucide-react";
 import type { FlickVideo } from "@/lib/reddit/types";
 import { cn, containRect, isLandscapeRatio, mediaRatio } from "@/lib/utils";
 import { shouldSkipDeadVideo, type VideoFailureReason } from "@/lib/video-playing";
+import { audioUrlsForSource, videoSources } from "@/lib/video-sources";
 
 /**
  * How long the active video gets to actually start before we write it off.
@@ -74,21 +75,29 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
 
   /**
    * The preferred file first, then whatever else the post can play — a redgifs
-   * clip carries Reddit's own muted copy as `fallbackUrl`, for networks where
-   * the redgifs CDN is blocked.
+   * clip carries Reddit's own copy as `fallbackUrl`, for networks where the
+   * redgifs CDN is blocked.
    */
-  const sources = useMemo(() => {
-    const list = [video.url, video.fallbackUrl].filter((url): url is string => Boolean(url));
-    return [...new Set(list)];
-  }, [video.fallbackUrl, video.url]);
+  const sources = useMemo(() => videoSources(video), [video]);
   const source = sources[sourceIndex];
+  const isFallbackSource = sourceIndex > 0;
 
-  /** Reddit renames its audio files, so try each known URL before giving up. */
-  const audioUrls = useMemo(() => {
-    const list = video.audioUrls?.length ? video.audioUrls : video.audioUrl ? [video.audioUrl] : [];
-    return [...new Set(list)];
-  }, [video.audioUrl, video.audioUrls]);
+  /**
+   * Reddit renames its audio files, so try each known URL before giving up.
+   * The list follows the source: a redgifs mp4 has its sound already, and the
+   * sidecar belongs to the fallback it just failed over to.
+   */
+  const audioUrls = useMemo(
+    () => audioUrlsForSource(video, isFallbackSource),
+    [video, isFallbackSource],
+  );
   const audioUrl = audioUrls[audioIndex];
+  // Falling back swaps which file the sound comes from, so a candidate index
+  // that made sense for the previous source is meaningless against the new one.
+  const audioKey = audioUrls.join("|");
+  useEffect(() => {
+    setAudioIndex(0);
+  }, [audioKey]);
 
   const clearStartTimer = useCallback(() => {
     if (startTimer.current !== null) window.clearTimeout(startTimer.current);

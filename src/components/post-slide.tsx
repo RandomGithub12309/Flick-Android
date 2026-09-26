@@ -1,10 +1,22 @@
-import { useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, FileText, Link2 } from "lucide-react";
-import type { FlickPost } from "@/lib/reddit/types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, ExternalLink, FileText, Link2 } from "lucide-react";
+import type { FlickPost, FlickVideo } from "@/lib/reddit/types";
 import { SeekBar } from "@/components/seek-bar";
 import { VideoPlayer } from "@/components/video-player";
 import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
+import { requestRedgifsClip } from "@/lib/reddit/clip";
+import { audioCandidatesFor } from "@/lib/video-sources";
 import { cn, formatScore, isLandscapeRatio, mediaRatio } from "@/lib/utils";
+
+/**
+ * How many fresh URLs a slide may ask for before it gives up on playing the
+ * clip. Two covers an expired link plus one unlucky retry.
+ */
+const MAX_CLIP_RETRIES = 2;
+
+function redgifsWatchUrl(id: string): string {
+  return `https://www.redgifs.com/watch/${id}`;
+}
 
 type Props = {
   post: FlickPost;
@@ -24,13 +36,80 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
     duration: 0,
   });
   const [galleryIndex, setGalleryIndex] = useState(0);
+  /**
+   * A clip looked up on demand, and whether this slide has run out of ways to
+   * play it. Both are per-post: the feed keys slides by post id.
+   */
+  const [clip, setClip] = useState<FlickVideo | null>(null);
+  const [unplayable, setUnplayable] = useState(false);
   const videoRef = useRef<VideoHandle>(null);
+  const retries = useRef(0);
+  const lookedUp = useRef(false);
+
   const gallery = post.gallery ?? [];
+  const redgifsId = post.redgifsId;
+  const video = clip ?? post.video;
   const image =
     post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
   const poster = post.image?.url ?? post.thumbnail;
-  const landscapeVideo = isLandscapeRatio(mediaRatio(post.video?.width, post.video?.height));
+  const landscapeVideo = isLandscapeRatio(mediaRatio(video?.width, video?.height));
   const landscapeImage = isLandscapeRatio(mediaRatio(image?.width, image?.height));
+
+  const tryingToPlay = Boolean(video) && !unplayable;
+
+  // A redgifs post can reach the feed with nothing playable attached: the
+  // lookup failed while loading, or the post is a bare link Reddit never
+  // mirrored. One lookup when the slide comes on screen turns those into
+  // videos instead of leaving a title card (or a skip) in their place.
+  useEffect(() => {
+    if (!active || post.video || !redgifsId || lookedUp.current) return;
+    lookedUp.current = true;
+    let cancelled = false;
+    void requestRedgifsClip(redgifsId).then((resolved) => {
+      if (!cancelled && resolved) setClip(resolved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, post.video, redgifsId]);
+
+  // Swiping back to a slide is a fresh chance to play it.
+  useEffect(() => {
+    if (!active) return;
+    retries.current = 0;
+    setUnplayable(false);
+  }, [active]);
+
+  const handleUnplayable = useCallback(() => {
+    if (!redgifsId) {
+      onUnplayable?.();
+      return;
+    }
+    // Reddit's own copy (where one exists) already failed alongside the clip,
+    // so a URL fetched just now is the only thing left to try.
+    if (retries.current < MAX_CLIP_RETRIES) {
+      retries.current += 1;
+      const failedUrl = video?.url;
+      const redditCopy = post.video;
+      void requestRedgifsClip(redgifsId, { fresh: true }).then((resolved) => {
+        if (!resolved || resolved.url === failedUrl) {
+          setUnplayable(true);
+          return;
+        }
+        // A fresh URL is not a fresh chance to be the last one: keep the host's
+        // own copy, with its audio, as the fallback for the new attempt too.
+        setClip({
+          ...resolved,
+          fallbackUrl: redditCopy?.fallbackUrl ?? redditCopy?.url,
+          fallbackAudioUrls: redditCopy?.fallbackAudioUrls ?? audioCandidatesFor(redditCopy),
+        });
+      });
+      return;
+    }
+    // Out of retries. This is a clip someone deliberately saved, so show the
+    // post (poster, title, a way out to redgifs) rather than skipping it.
+    setUnplayable(true);
+  }, [onUnplayable, post.video, redgifsId, video?.url]);
 
   return (
     <article
@@ -40,15 +119,15 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
         willChange: "transform",
       }}
     >
-      {post.kind === "video" && post.video ? (
+      {tryingToPlay && video ? (
         <VideoPlayer
           ref={videoRef}
-          video={post.video}
+          video={video}
           active={active}
           muted={muted}
           poster={poster}
           onProgress={setPlayback}
-          onUnplayable={onUnplayable}
+          onUnplayable={handleUnplayable}
         />
       ) : image ? (
         <>
@@ -126,7 +205,7 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
       <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-safe pt-16">
         {/* Only the active slide gets the control — three overlapping
             scrubbers would fight each other for the same gesture. */}
-        {post.kind === "video" && active ? (
+        {tryingToPlay && active ? (
           <SeekBar
             ratio={playback.ratio}
             buffered={playback.buffered}
@@ -147,6 +226,17 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
             {post.title}
           </h2>
           <p className="mt-1 text-sm text-muted">u/{post.author}</p>
+          {unplayable && redgifsId ? (
+            <a
+              href={redgifsWatchUrl(redgifsId)}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-fg/12 px-3 py-1.5 text-sm font-medium text-fg"
+            >
+              <ExternalLink className="size-4" />
+              Watch on redgifs
+            </a>
+          ) : null}
         </div>
       </div>
     </article>
