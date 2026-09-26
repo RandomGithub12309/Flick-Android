@@ -158,8 +158,10 @@ export function ConnectForm() {
                 reddit.com/prefs/apps
                 <ExternalLink className="ml-1 inline size-3.5" />
               </a>{" "}
-              and create an <span className="text-fg">installed app</span> (not script — no
-              secret is issued).
+              and create an app. Set the type to <span className="text-fg">installed app</span> — do{" "}
+              <span className="text-fg">not</span> pick script or web app. Installed apps issue no
+              client secret and Flick never asks for one; script and web apps are rejected at
+              sign-in.
             </li>
             <li>
               Redirect URI:{" "}

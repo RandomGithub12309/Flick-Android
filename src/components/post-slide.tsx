@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, Link2 } from "lucide-react";
 import type { FlickPost } from "@/lib/reddit/types";
+import { SpeedBar } from "@/components/speed-bar";
 import { VideoPlayer } from "@/components/video-player";
+import { useFlick } from "@/store/flick";
 import { cn, formatScore } from "@/lib/utils";
 
 type Props = {
@@ -11,11 +13,14 @@ type Props = {
   offset: number;
   drag: number;
   animating: boolean;
+  onUnplayable?: () => void;
 };
 
-export function PostSlide({ post, active, muted, offset, drag, animating }: Props) {
+export function PostSlide({ post, active, muted, offset, drag, animating, onUnplayable }: Props) {
   const [progress, setProgress] = useState(0);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const playbackRate = useFlick((s) => s.playbackRate);
+  const setPlaybackRate = useFlick((s) => s.setPlaybackRate);
   const gallery = post.gallery ?? [];
   const image =
     post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
@@ -33,7 +38,9 @@ export function PostSlide({ post, active, muted, offset, drag, animating }: Prop
           video={post.video}
           active={active}
           muted={muted}
+          playbackRate={playbackRate}
           onProgress={setProgress}
+          onUnplayable={onUnplayable}
         />
       ) : image ? (
         <img
@@ -65,12 +72,17 @@ export function PostSlide({ post, active, muted, offset, drag, animating }: Prop
       <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-bg/80 via-transparent to-bg/35" />
 
       {post.kind === "video" ? (
-        <div className="absolute inset-x-0 top-0 h-0.5 bg-fg/15">
-          <div
-            className="h-full bg-primary"
-            style={{ width: `${Math.min(100, progress * 100)}%` }}
-          />
-        </div>
+        <>
+          {/* Only the active slide gets the control — three overlapping
+              scrubbers would fight each other for the same gesture. */}
+          {active ? <SpeedBar rate={playbackRate} onChange={setPlaybackRate} /> : null}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-fg/15">
+            <div
+              className="h-full bg-fg/40"
+              style={{ width: `${Math.min(100, progress * 100)}%` }}
+            />
+          </div>
+        </>
       ) : null}
 
       {post.kind === "gallery" && gallery.length > 1 ? (

@@ -32,6 +32,12 @@ export const Route = createRootRoute({
       { rel: "manifest", href: "/__grok/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
     ],
+    scripts: [
+      // Chrome only offers "Install app" when a service worker with a fetch
+      // handler is registered. Flick's is pass-through (public/sw.js) — present
+      // for installability, caching nothing so a redeploy can never go stale.
+      { src: "/sw-register.js" },
+    ],
   }),
   component: () => (
     <html lang="en" className="antialiased" suppressHydrationWarning>
