@@ -21,7 +21,7 @@ const config: CapacitorConfig = {
   webDir: "native/www",
   server: {
     // TODO: replace with your deployed URL, e.g. "https://flick-saved.vercel.app"
-    url: "https://REPLACE-WITH-YOUR-DEPLOYED-URL.vercel.app",
+    url: "https://flick-android-ehld5hhmk-lr-0a58.vercel.app",
     cleartext: false,
   },
 };
