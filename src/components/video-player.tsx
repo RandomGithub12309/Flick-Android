@@ -9,9 +9,24 @@ import {
 } from "react";
 import { Play } from "lucide-react";
 import type { FlickVideo } from "@/lib/reddit/types";
-import { cn, containRect, isLandscapeRatio, mediaRatio } from "@/lib/utils";
-import { shouldSkipDeadVideo, type VideoFailureReason } from "@/lib/video-playing";
+import {
+  effectiveDuration,
+  shouldSkipDeadVideo,
+  type VideoFailureReason,
+} from "@/lib/video-playing";
 import { audioUrlsForSource, videoSources } from "@/lib/video-sources";
+
+/** End of the seekable window, or null when the browser reports none. */
+function seekableEndOf(el: HTMLMediaElement): number | null {
+  try {
+    const { seekable } = el;
+    if (seekable.length === 0) return null;
+    const end = seekable.end(seekable.length - 1);
+    return Number.isFinite(end) ? end : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * How long the active video gets to actually start before we write it off.
@@ -44,7 +59,7 @@ type Props = {
   video: FlickVideo;
   active: boolean;
   muted: boolean;
-  /** Still frame used as a blurred fill behind letterboxed landscape clips. */
+  /** Still frame shown behind the video as a blurred backdrop. */
   poster?: string;
   onProgress?: (info: PlaybackInfo) => void;
   /** Fired once per activation when this video can't be played at all. */
@@ -57,7 +72,6 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
 
   const startTimer = useRef<number | null>(null);
   const reported = useRef(false);
@@ -67,11 +81,10 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   activeRef.current = active;
   onUnplayableRef.current = onUnplayable;
   const [blocked, setBlocked] = useState(false);
-  const [native, setNative] = useState({ w: video.width, h: video.height });
-  const [measured, setMeasured] = useState(false);
-  const [frame, setFrame] = useState({ w: 0, h: 0 });
   const [sourceIndex, setSourceIndex] = useState(0);
   const [audioIndex, setAudioIndex] = useState(0);
+  /** Which sidecar URL was explicitly started; a mute toggle must not reload it. */
+  const startedAudioSrc = useRef<string | null>(null);
 
   /**
    * The preferred file first, then whatever else the post can play — a redgifs
@@ -135,31 +148,9 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   }, [sourceIndex, sources.length]);
 
   useEffect(() => {
-    setNative({ w: video.width, h: video.height });
-    setMeasured(false);
     setSourceIndex(0);
     setAudioIndex(0);
   }, [video.url, video.width, video.height]);
-
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
-    const update = () => setFrame({ w: stage.clientWidth, h: stage.clientHeight });
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(update);
-    ro.observe(stage);
-    return () => ro.disconnect();
-  }, [video.url]);
-
-  const ratio = mediaRatio(native.w, native.h);
-  // Until the element reports its size, letterbox — Reddit's fallback 720×1280
-  // would otherwise cover-crop a landscape file into a thin centre strip.
-  const letterbox = !measured || isLandscapeRatio(ratio) || ratio == null;
-  const box =
-    measured && letterbox && frame.w > 0 && native.w > 0 && native.h > 0
-      ? containRect(frame.w, frame.h, native.w, native.h)
-      : null;
 
   useImperativeHandle(
     ref,
@@ -167,11 +158,17 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       seek(ratio: number) {
         const el = videoRef.current;
         if (!el) return;
-        const { duration } = el;
-        if (!Number.isFinite(duration) || duration <= 0) return;
+        const duration = effectiveDuration(el.duration, seekableEndOf(el));
+        if (duration <= 0) return;
         const time = Math.min(1, Math.max(0, ratio)) * duration;
         el.currentTime = time;
-        if (audioRef.current) audioRef.current.currentTime = time;
+        // The sidecar may not have metadata yet — setting currentTime then
+        // throws, and must not take the video's seek down with it.
+        try {
+          if (audioRef.current) audioRef.current.currentTime = time;
+        } catch {
+          // The timeupdate sync pulls it back in line once it can seek.
+        }
       },
     }),
     [],
@@ -190,7 +187,9 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     };
 
     const publish = () => {
-      const duration = Number.isFinite(el.duration) ? el.duration : 0;
+      // Fragmented uploads report Infinity/NaN duration; the seekable window
+      // is the timeline then, and without it the seek bar stays disabled.
+      const duration = effectiveDuration(el.duration, seekableEndOf(el));
       let buffered: number | null = null;
       if (duration > 0 && el.buffered.length > 0) {
         try {
@@ -230,13 +229,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       on("timeupdate", onTime),
       on("progress", publish),
       on("durationchange", publish),
-      on("loadedmetadata", () => {
-        if (el.videoWidth > 0 && el.videoHeight > 0) {
-          setNative({ w: el.videoWidth, h: el.videoHeight });
-          setMeasured(true);
-        }
-        publish();
-      }),
+      on("loadedmetadata", publish),
       on("seeked", () => {
         syncAudio();
         publish();
@@ -279,7 +272,11 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     const audio = audioRef.current;
     if (!el) return;
     el.muted = muted;
-    if (audio) audio.muted = muted;
+    el.volume = 1;
+    if (audio) {
+      audio.muted = muted;
+      audio.volume = 1;
+    }
     if (!active) {
       el.pause();
       audio?.pause();
@@ -287,10 +284,24 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       setBlocked(false);
       return;
     }
+    // The sidecar starts explicitly with the picture — not just off the
+    // video's `play` event. Flipping `preload` from "none" does not reliably
+    // kick off a load on its own, and a sidecar that never loads is a video
+    // that plays silent with no error ever firing. Each URL loads once: this
+    // effect also runs on mute toggles, and those must not restart the audio.
+    if (audio && audioUrl && startedAudioSrc.current !== audioUrl) {
+      startedAudioSrc.current = audioUrl;
+      try {
+        audio.load();
+      } catch {
+        // A redundant load() is harmless; a missing one is silence.
+      }
+    }
     void el.play().then(
       () => {
         blockedRef.current = false;
         setBlocked(false);
+        if (audio && !muted) void audio.play().catch(() => undefined);
       },
       (err: unknown) => {
         // Autoplay refused: the media is fine, the browser just wants a
@@ -301,7 +312,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         }
       },
     );
-  }, [active, muted, source, video.url]);
+  }, [active, audioUrl, muted, source, video.url]);
 
   // Only the active slide judges itself. Keep the grace timer tied to slide
   // activation, not callback/render changes, so a watchdog re-arm cannot make
@@ -326,20 +337,22 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   }, [active, advanceSource, clearStartTimer, reportUnplayable, video.url]);
 
   return (
-    <div ref={stageRef} className="absolute inset-0 overflow-hidden bg-black">
-      {letterbox && poster ? (
+    <div className="absolute inset-0 overflow-hidden bg-black">
+      {poster ? (
         <img
           src={poster}
           alt=""
           aria-hidden
           draggable={false}
-          className="absolute inset-0 size-full object-cover opacity-70 blur-2xl scale-125"
+          className="pointer-events-none absolute inset-0 size-full object-cover opacity-40 blur-2xl scale-110"
         />
       ) : null}
       {/*
-        Landscape on a portrait screen is sized to a contain-rect (the full
-        frame, letterboxed) instead of object-cover, which sliced 16:9 clips
-        down to a thin centre band. Portrait clips still bleed to the edges.
+        Always contained: the whole frame stays visible on every screen shape.
+        Cover-cropping "portrait" clips sliced heads on wide viewports, and any
+        mismatch between the tagged dimensions and the real file cropped blind.
+        On a phone a portrait clip still fills the frame — containment only
+        shows its bars when the aspects actually disagree.
       */}
       <video
         ref={videoRef}
@@ -350,25 +363,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         autoPlay={active}
         muted={muted}
         preload={active ? "auto" : "metadata"}
-        style={
-          box
-            ? {
-                position: "absolute",
-                width: box.width,
-                height: box.height,
-                left: box.left,
-                top: box.top,
-              }
-            : undefined
-        }
-        className={cn(
-          "bg-black object-contain",
-          box
-            ? null
-            : letterbox
-              ? "absolute inset-0 size-full object-contain"
-              : "absolute inset-0 size-full object-cover",
-        )}
+        className="absolute inset-0 size-full bg-black object-contain"
       />
       {blocked ? (
         <button
@@ -378,11 +373,15 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => {
             const el = videoRef.current;
+            const audio = audioRef.current;
             if (!el) return;
             void el.play().then(
               () => {
                 blockedRef.current = false;
                 setBlocked(false);
+                // A real gesture: start the sidecar here too, not just the
+                // picture, or the tap buys video with no sound.
+                if (audio && !muted) void audio.play().catch(() => undefined);
               },
               () => undefined,
             );

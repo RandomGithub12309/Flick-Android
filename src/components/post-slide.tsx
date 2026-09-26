@@ -42,6 +42,12 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
    */
   const [clip, setClip] = useState<FlickVideo | null>(null);
   const [unplayable, setUnplayable] = useState(false);
+  /**
+   * Remount counter for proxy retries: proxy URLs are stable by design, so
+   * replaying one after a fresh server-side resolve needs a new element, not
+   * a new URL.
+   */
+  const [attempt, setAttempt] = useState(0);
   const videoRef = useRef<VideoHandle>(null);
   const retries = useRef(0);
   const lookedUp = useRef(false);
@@ -57,12 +63,22 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
 
   const tryingToPlay = Boolean(video) && !unplayable;
 
+  // Swiping back to a slide is a fresh chance to play it — including one more
+  // lookup for a clip that came up empty last time. (Declared before the
+  // lookup effect so the reset lands before the lookup's guard is checked.)
+  useEffect(() => {
+    if (!active) return;
+    retries.current = 0;
+    lookedUp.current = false;
+    setUnplayable(false);
+  }, [active]);
+
   // A redgifs post can reach the feed with nothing playable attached: the
   // lookup failed while loading, or the post is a bare link Reddit never
-  // mirrored. One lookup when the slide comes on screen turns those into
-  // videos instead of leaving a title card (or a skip) in their place.
+  // mirrored. One lookup per activation turns those into videos instead of
+  // leaving a title card (or a skip) in their place.
   useEffect(() => {
-    if (!active || post.video || !redgifsId || lookedUp.current) return;
+    if (!active || post.video || clip || !redgifsId || lookedUp.current) return;
     lookedUp.current = true;
     let cancelled = false;
     void requestRedgifsClip(redgifsId).then((resolved) => {
@@ -71,14 +87,7 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
     return () => {
       cancelled = true;
     };
-  }, [active, post.video, redgifsId]);
-
-  // Swiping back to a slide is a fresh chance to play it.
-  useEffect(() => {
-    if (!active) return;
-    retries.current = 0;
-    setUnplayable(false);
-  }, [active]);
+  }, [active, clip, post.video, redgifsId]);
 
   const handleUnplayable = useCallback(() => {
     if (!redgifsId) {
@@ -92,17 +101,29 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
       const failedUrl = video?.url;
       const redditCopy = post.video;
       void requestRedgifsClip(redgifsId, { fresh: true }).then((resolved) => {
-        if (!resolved || resolved.url === failedUrl) {
+        if (!resolved) {
           setUnplayable(true);
           return;
         }
-        // A fresh URL is not a fresh chance to be the last one: keep the host's
-        // own copy, with its audio, as the fallback for the new attempt too.
-        setClip({
-          ...resolved,
-          fallbackUrl: redditCopy?.fallbackUrl ?? redditCopy?.url,
-          fallbackAudioUrls: redditCopy?.fallbackAudioUrls ?? audioCandidatesFor(redditCopy),
-        });
+        if (resolved.url !== failedUrl) {
+          // A fresh URL is not a fresh chance to be the last one: keep the
+          // host's own copy, with its audio, as the fallback for the new
+          // attempt too.
+          setClip({
+            ...resolved,
+            fallbackUrl: redditCopy?.fallbackUrl ?? redditCopy?.url,
+            fallbackAudioUrls: redditCopy?.fallbackAudioUrls ?? audioCandidatesFor(redditCopy),
+          });
+          return;
+        }
+        // The proxy URL is stable by design, so "same URL" after a fresh
+        // lookup is not a dead end — the server re-resolved behind it. Replay
+        // it on a new element; a new URL string would be needed otherwise.
+        if (resolved.url.startsWith("/api/redgifs/")) {
+          setAttempt((n) => n + 1);
+          return;
+        }
+        setUnplayable(true);
       });
       return;
     }
@@ -121,6 +142,7 @@ export function PostSlide({ post, active, muted, offset, drag, animating, onUnpl
     >
       {tryingToPlay && video ? (
         <VideoPlayer
+          key={attempt}
           ref={videoRef}
           video={video}
           active={active}

@@ -1,4 +1,5 @@
 import { parseListingChildren, parseRedditPost, redgifsIdFromPost } from "./parse";
+import { isValidRedgifsId, normalizeRedgifsId, redgifsProxyUrl } from "./redgifs";
 import { audioCandidatesFor } from "../video-sources";
 import type { FlickPost, SavedPage } from "./types";
 
@@ -280,13 +281,96 @@ export async function resolveRedgifsClip(
   const cached = redgifsClips.get(key);
   const fresh = options.fresh === true && takeFreshBudget(now);
   if (!fresh && cached && now < cached.exp) return cached.clip;
-  const clip = await fetchRedgifs(key);
+  const fetched = await fetchRedgifs(key);
+  const clip = fetched?.clip ?? null;
   if (redgifsClips.size >= REDGIFS_CACHE_LIMIT) redgifsClips.clear();
   redgifsClips.set(key, { clip, exp: clipCacheExpiry(clip, Date.now()) });
   return clip;
 }
 
-async function fetchRedgifs(id: string, allowRetry = true): Promise<RedgifsClip | null> {
+/**
+ * Direct CDN URLs for the proxy's server-side fetch, cached briefly. Video
+ * seeks issue a new Range GET per jump, and each one would otherwise cost an
+ * API round-trip; the 5-minute window also bounds how stale a signed link can
+ * get, since the proxy re-resolves from here on every play.
+ */
+type DirectCacheEntry = { at: number; url: string | null };
+const redgifsDirect = new Map<string, DirectCacheEntry>();
+const REDGIFS_DIRECT_TTL_MS = 5 * 60 * 1000;
+
+async function redgifsDirectUrl(id: string): Promise<string | null> {
+  const hit = redgifsDirect.get(id);
+  if (hit && Date.now() - hit.at < REDGIFS_DIRECT_TTL_MS) return hit.url;
+  const fetched = await fetchRedgifs(id);
+  const url = fetched?.directUrl ?? null;
+  redgifsDirect.set(id, { at: Date.now(), url });
+  if (redgifsDirect.size > 500) redgifsDirect.delete(redgifsDirect.keys().next().value as string);
+  return url;
+}
+
+/**
+ * `GET /api/redgifs/<id>` — stream the clip's mp4 with the UA/Referer the CDN
+ * demands. Range requests pass through so seeking works and mobile browsers
+ * get the 206 + Accept-Ranges they require for `<video>`.
+ */
+export async function streamRedgifsFile(rawId: string, request: Request): Promise<Response> {
+  const id = normalizeRedgifsId(rawId);
+  if (!isValidRedgifsId(id)) {
+    return Response.json({ error: "bad redgifs id" }, { status: 400 });
+  }
+  const target = await redgifsDirectUrl(id);
+  if (!target) {
+    return Response.json({ error: "redgifs lookup failed" }, { status: 502 });
+  }
+
+  const upstreamHeaders = new Headers({
+    "User-Agent": REDGIFS_UA,
+    Referer: `https://www.redgifs.com/watch/${id}`,
+    Origin: "https://www.redgifs.com",
+  });
+  const range = request.headers.get("range");
+  if (range) upstreamHeaders.set("Range", range);
+
+  let upstream: Response;
+  try {
+    // No abort timeout: media bodies stream for the life of playback.
+    upstream = await fetch(target, { headers: upstreamHeaders, redirect: "follow" });
+  } catch {
+    return Response.json({ error: "redgifs fetch failed" }, { status: 502 });
+  }
+  if (!upstream.ok && upstream.status !== 206 && upstream.status !== 416) {
+    return Response.json({ error: `redgifs upstream ${upstream.status}` }, { status: 502 });
+  }
+  if (!upstream.body) {
+    return Response.json({ error: "empty upstream body" }, { status: 502 });
+  }
+
+  const out = new Headers();
+  for (const name of [
+    "content-type",
+    "content-length",
+    "content-range",
+    "accept-ranges",
+    "etag",
+    "last-modified",
+  ]) {
+    const value = upstream.headers.get(name);
+    if (value) out.set(name, value);
+  }
+  if (!out.has("content-type")) out.set("content-type", "video/mp4");
+  if (!out.has("accept-ranges")) out.set("accept-ranges", "bytes");
+  out.set("cache-control", "private, max-age=600");
+  return new Response(upstream.body, { status: upstream.status, headers: out });
+}
+
+type FetchedRedgifs = {
+  /** What the feed plays: the same-origin proxy URL, never the CDN link. */
+  clip: RedgifsClip;
+  /** The IP-bound CDN URL, used only by the proxy's server-side fetch. */
+  directUrl: string;
+};
+
+async function fetchRedgifs(id: string, allowRetry = true): Promise<FetchedRedgifs | null> {
   const token = await getRedgifsToken();
   if (!token) return null;
   try {
@@ -320,14 +404,19 @@ async function fetchRedgifs(id: string, allowRetry = true): Promise<RedgifsClip 
     const gif = json.gif;
     // `hd` is the full-quality mp4 and carries the clip's sound; `sd` is the
     // mobile encode, used only when there is no HD master.
-    const url = gif?.urls?.hd || gif?.urls?.sd;
-    if (!url) return null;
+    const directUrl = gif?.urls?.hd || gif?.urls?.sd;
+    if (!directUrl) return null;
+    // The direct link is IP-bound and UA-gated: it 403s in the browser, so the
+    // player never sees it — it plays the proxy, which re-resolves per request.
     return {
-      url,
-      hasAudio: Boolean(gif?.hasAudio),
-      width: gif?.width,
-      height: gif?.height,
-      duration: gif?.duration,
+      clip: {
+        url: redgifsProxyUrl(id),
+        hasAudio: Boolean(gif?.hasAudio),
+        width: gif?.width,
+        height: gif?.height,
+        duration: gif?.duration,
+      },
+      directUrl,
     };
   } catch {
     return null;

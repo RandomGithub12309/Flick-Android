@@ -1,3 +1,4 @@
+import { redgifsProxyUrl } from "./redgifs";
 import type { FlickImage, FlickPost, FlickVideo } from "./types";
 
 const MINOR_PATTERN =
@@ -165,14 +166,17 @@ export function redgifsIdFromMediaUrl(url: string): string | undefined {
 }
 
 /**
- * A redgifs clip file used directly as a post's link — `…/Foo.mp4` plays as-is,
- * and the `-silent` variant tells us there is no sound to fetch.
+ * A redgifs clip file used directly as a post's link — `…/Foo.mp4`, or the
+ * `-silent` cut, which tells us there is no sound to fetch. It plays through
+ * the proxy, not as-is: the CDN validates UA/Referer per request and 403s a
+ * bare browser fetch.
  */
 export function redgifsMediaVideo(url: string): { url: string; hasAudio: boolean } | undefined {
-  if (!redgifsIdFromMediaUrl(url)) return undefined;
+  const id = redgifsIdFromMediaUrl(url);
+  if (!id) return undefined;
   const path = url.split(/[?#]/)[0];
   if (!/\.(?:mp4|webm)$/i.test(path)) return undefined;
-  return { url, hasAudio: !/-silent\.(?:mp4|webm)$/i.test(path) };
+  return { url: redgifsProxyUrl(id), hasAudio: !/-silent\.(?:mp4|webm)$/i.test(path) };
 }
 
 /**
