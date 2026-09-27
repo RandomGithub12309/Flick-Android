@@ -197,6 +197,7 @@ export function Feed() {
           offset={offset}
           drag={drag}
           animating={animating || startY.current != null}
+          uiVisible={controlsVisible}
           onUnplayable={
             offset === 0 && !animating && item.kind === "video" ? skipUnplayable : undefined
           }

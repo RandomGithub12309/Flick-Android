@@ -61,13 +61,15 @@ type Props = {
   muted: boolean;
   /** Still frame shown behind the video as a blurred backdrop. */
   poster?: string;
+  /** Hide playback UI while leaving the video itself visible. */
+  uiVisible?: boolean;
   onProgress?: (info: PlaybackInfo) => void;
   /** Fired once per activation when this video can't be played at all. */
   onUnplayable?: () => void;
 };
 
 export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
-  { video, active, muted, poster, onProgress, onUnplayable },
+  { video, active, muted, poster, uiVisible = true, onProgress, onUnplayable },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -365,7 +367,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         preload={active ? "auto" : "metadata"}
         className="absolute inset-0 size-full bg-black object-contain"
       />
-      {blocked ? (
+      {blocked && uiVisible ? (
         <button
           type="button"
           aria-label="Play video"
