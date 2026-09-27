@@ -150,18 +150,17 @@ export function PostSlide({
       }}
     >
       {tryingToPlay && video ? (
-        <div className={cn("absolute inset-0", !uiVisible && "invisible")}>
-          <VideoPlayer
-            key={attempt}
-            ref={videoRef}
-            video={video}
-            active={active}
-            muted={muted}
-            poster={poster}
-            onProgress={setPlayback}
-            onUnplayable={handleUnplayable}
-          />
-        </div>
+        <VideoPlayer
+          key={attempt}
+          ref={videoRef}
+          video={video}
+          active={active}
+          muted={muted}
+          poster={poster}
+          uiVisible={uiVisible}
+          onProgress={setPlayback}
+          onUnplayable={handleUnplayable}
+        />
       ) : image ? (
         <>
           {landscapeImage ? (
