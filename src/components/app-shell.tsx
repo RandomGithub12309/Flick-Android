@@ -14,9 +14,7 @@ function LoadingView() {
     <main className="flex min-h-dvh flex-col items-center justify-center bg-bg px-6 text-center">
       <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted">Flick</p>
       <p className="mt-4 text-lg text-fg">{label || "Loading…"}</p>
-      {count > 0 ? (
-        <p className="mt-2 tabular-nums text-sm text-muted">{count} posts</p>
-      ) : null}
+      {count > 0 ? <p className="mt-2 tabular-nums text-sm text-muted">{count} posts</p> : null}
     </main>
   );
 }
@@ -45,7 +43,9 @@ export function AppShell() {
   useEffect(() => registerNativeOauthListener(), []);
 
   return (
-    <div className="mx-auto min-h-dvh w-full max-w-md bg-bg md:shadow-[var(--shadow-border)]">
+    <div
+      className={`mx-auto min-h-dvh w-full bg-bg ${screen === "feed" ? "max-w-none" : "max-w-md md:shadow-[var(--shadow-border)]"}`}
+    >
       {screen === "feed" ? (
         <Feed />
       ) : screen === "connect" ? (
