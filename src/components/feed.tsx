@@ -24,6 +24,7 @@ export function Feed() {
   const signOut = useFlick((s) => s.signOut);
   const setScreen = useFlick((s) => s.setScreen);
 
+  const [controlsVisible, setControlsVisible] = useState(true);
   const [drag, setDrag] = useState(0);
   const [animating, setAnimating] = useState(false);
   const [skipNotice, setSkipNotice] = useState<string | null>(null);
@@ -202,39 +203,60 @@ export function Feed() {
         />
       ))}
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-4 pt-safe">
-        <div className="pointer-events-auto pt-3">
-          <p className="text-xs font-medium uppercase tracking-widest text-fg/80">
-            {source === "saved" ? "Saved" : "Shuffle"}
-          </p>
-          <p className="tabular-nums text-sm text-muted">
-            {index + 1} / {posts.length}
-          </p>
-        </div>
+      {controlsVisible ? (
+        <>
+          <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-4 pt-safe">
+            <div className="pointer-events-auto pt-3">
+              <p className="text-xs font-medium uppercase tracking-widest text-fg/80">
+                {source === "saved" ? "Saved" : "Shuffle"}
+              </p>
+              <p className="tabular-nums text-sm text-muted">
+                {index + 1} / {posts.length}
+              </p>
+            </div>
+            <div className="pointer-events-auto mt-3 flex gap-2">
+              <button
+                type="button"
+                className="rounded-full bg-bg/40 px-3 py-2 text-sm text-fg shadow-[var(--shadow-border)]"
+                onClick={() => setControlsVisible(false)}
+              >
+                Hide UI
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-bg/40 px-3 py-2 text-sm text-fg shadow-[var(--shadow-border)]"
+                onClick={() => setScreen("home")}
+              >
+                Close
+              </button>
+            </div>
+          </header>
+
+          {skipNotice ? (
+            <div className="pointer-events-none absolute inset-x-0 top-20 z-30 flex justify-center px-6">
+              <p className="rounded-full bg-bg/80 px-3 py-1.5 text-center text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm">
+                {skipNotice}
+              </p>
+            </div>
+          ) : null}
+
+          <ActionRail
+            muted={muted}
+            permalink={post.permalink}
+            onShuffle={reroll}
+            onToggleMute={toggleMuted}
+            onSignOut={source === "saved" ? signOut : undefined}
+          />
+        </>
+      ) : (
         <button
           type="button"
-          className="pointer-events-auto mt-3 rounded-full bg-bg/40 px-3 py-2 text-sm text-fg shadow-[var(--shadow-border)]"
-          onClick={() => setScreen("home")}
-        >
-          Close
-        </button>
-      </header>
-
-      {skipNotice ? (
-        <div className="pointer-events-none absolute inset-x-0 top-20 z-30 flex justify-center px-6">
-          <p className="rounded-full bg-bg/80 px-3 py-1.5 text-center text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm">
-            {skipNotice}
-          </p>
-        </div>
-      ) : null}
-
-      <ActionRail
-        muted={muted}
-        permalink={post.permalink}
-        onShuffle={reroll}
-        onToggleMute={toggleMuted}
-        onSignOut={source === "saved" ? signOut : undefined}
-      />
+          className="absolute inset-0 z-40 cursor-default bg-transparent"
+          aria-label="Show interface"
+          title="Tap to show interface"
+          onClick={() => setControlsVisible(true)}
+        />
+      )}
     </section>
   );
 }
