@@ -11,6 +11,7 @@
     "build": "node scripts/with-app-env.mjs node ./node_modules/vite/bin/vite.js build && npm run db:migrate",
     "db:migrate": "node scripts/migrate.mjs",
     "build:dev": "node scripts/with-app-env.mjs node ./node_modules/vite/bin/vite.js build --mode development",
+    "build:native": "node scripts/build-native.mjs",
     "preview": "node scripts/with-app-env.mjs node ./node_modules/vite/bin/vite.js preview",
     "preview:restart": "node scripts/preview.mjs restart",
     "preview:stop": "node scripts/preview.mjs stop",
