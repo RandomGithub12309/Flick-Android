@@ -1,1 +1,9 @@
 .vercel
+
+# Build output. `npm run build` writes the web bundle to dist/, and
+# `npm run build:native` writes the app that ships in the APK to native/www/
+# (which is what capacitor.config.ts points webDir at). Both are generated —
+# run the build rather than committing the result; the asset filenames are
+# content-hashed and churn on every build.
+dist/
+native/www/

@@ -20,3 +20,18 @@ export function normalizeRedgifsId(id: string): string {
 export function redgifsProxyUrl(id: string): string {
   return `/api/redgifs/${encodeURIComponent(normalizeRedgifsId(id))}`;
 }
+
+/**
+ * What URL a resolved redgifs clip should carry.
+ *
+ * - `proxy` — the same-origin `/api/redgifs/<id>` route. The web app needs it:
+ *   the CDN signs links per requesting IP and validates UA/Referer, so a link
+ *   resolved in the browser 403s.
+ * - `direct` — the CDN link itself, for the packaged Android app, where a
+ *   native `WebViewClient` re-issues the request with the headers the CDN
+ *   demands (see `RedgifsWebViewClient`). There is no server to proxy through.
+ *
+ * It lives here rather than in `reddit-api.ts` so the parser can use it too
+ * without an import cycle.
+ */
+export type ClipPlayback = "proxy" | "direct";

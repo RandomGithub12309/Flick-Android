@@ -145,42 +145,62 @@ function authPopupPlugin(): Plugin {
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
-export default defineConfig(({ command, isPreview }) => ({
-  server: {
-    host: "0.0.0.0",
-    port: 8080,
-    strictPort: true,
-    // The live preview reaches the dev server through a proxy host, which
-    // Vite's host check would otherwise reject with a 403.
-    allowedHosts: true,
-  },
-  preview: {
-    host: "127.0.0.1",
-    port: 8081,
-    strictPort: true,
-  },
-  resolve: { tsconfigPaths: true },
-  plugins: [
-    pgliteBootstrapPlugin(),
-    // Before tanstackStart so /auth/popup never falls through to the SPA.
-    authPopupPlugin(),
-    // Dev-only /__app-env, read by scripts/check-auth-invariant.mjs.
-    appEnvPlugin(),
-    // PWA head + ?install=1 tutorial page; runs before Start/Nitro.
-    grokPwaPlugin(),
-    tailwindcss(),
-    tanstackStart(),
-    ...(command === "build" || isPreview
-      ? [
-          nitro({
-            preset: "vercel",
-            // Auto-registers server/middleware/* (the PWA install page +
-            // manifest + head-tag middleware). Nitro v3 defaults serverDir to
-            // false, so removing this silently unwires /?install=1 on deploys.
-            serverDir: "./server",
-          }),
-        ]
-      : []),
-    viteReact(),
-  ],
-}));
+export default defineConfig(({ command, isPreview }) => {
+  // `NATIVE_BUILD=1` (npm run build:native) produces the static bundle that
+  // ships inside the APK. Same plugins, two outputs:
+  //
+  //   web    — TanStack Start + Nitro on the Vercel preset, so the server
+  //            functions really run on a deployed server.
+  //   native — Start in SPA mode and *no* Nitro, because there is no server to
+  //            deploy to. The server functions run on the device instead
+  //            (src/lib/reddit/native-api.ts), so a server bundle would be dead
+  //            weight in the APK.
+  const nativeBuild = process.env.NATIVE_BUILD === "1";
+
+  return {
+    server: {
+      host: "0.0.0.0",
+      port: 8080,
+      strictPort: true,
+      // The live preview reaches the dev server through a proxy host, which
+      // Vite's host check would otherwise reject with a 403.
+      allowedHosts: true,
+    },
+    preview: {
+      host: "127.0.0.1",
+      port: 8081,
+      strictPort: true,
+    },
+    resolve: { tsconfigPaths: true },
+    plugins: [
+      pgliteBootstrapPlugin(),
+      // Before tanstackStart so /auth/popup never falls through to the SPA.
+      authPopupPlugin(),
+      // Dev-only /__app-env, read by scripts/check-auth-invariant.mjs.
+      appEnvPlugin(),
+      // PWA head + ?install=1 tutorial page; runs before Start/Nitro. Kept in
+      // the native build too — the branding is part of the app, not the deploy.
+      grokPwaPlugin(),
+      tailwindcss(),
+      tanstackStart(
+        nativeBuild
+          ? { spa: { enabled: true, prerender: { enabled: true, crawlLinks: true } } }
+          : {},
+      ),
+      ...(command === "build" || isPreview
+        ? nativeBuild
+          ? []
+          : [
+              nitro({
+                preset: "vercel",
+                // Auto-registers server/middleware/* (the PWA install page +
+                // manifest + head-tag middleware). Nitro v3 defaults serverDir to
+                // false, so removing this silently unwires /?install=1 on deploys.
+                serverDir: "./server",
+              }),
+            ]
+        : []),
+      viteReact(),
+    ],
+  };
+});

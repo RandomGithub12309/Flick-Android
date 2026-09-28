@@ -1,4 +1,4 @@
-import { redgifsProxyUrl } from "./redgifs";
+import { redgifsProxyUrl, type ClipPlayback } from "./redgifs";
 import type { FlickImage, FlickPost, FlickVideo } from "./types";
 
 const MINOR_PATTERN =
@@ -167,16 +167,27 @@ export function redgifsIdFromMediaUrl(url: string): string | undefined {
 
 /**
  * A redgifs clip file used directly as a post's link — `…/Foo.mp4`, or the
- * `-silent` cut, which tells us there is no sound to fetch. It plays through
- * the proxy, not as-is: the CDN validates UA/Referer per request and 403s a
- * bare browser fetch.
+ * `-silent` cut, which tells us there is no sound to fetch.
+ *
+ * On the web it plays through the proxy, not as-is: the CDN validates
+ * UA/Referer per request and 403s a bare browser fetch. On a device there is no
+ * proxy, so the CDN link is kept verbatim and `RedgifsWebViewClient` replays it
+ * with those headers — which is why the parser has to be told which of the two
+ * it's producing, or a natively-parsed post would carry a `/api/redgifs/…` URL
+ * that resolves to nothing inside the app.
  */
-export function redgifsMediaVideo(url: string): { url: string; hasAudio: boolean } | undefined {
+export function redgifsMediaVideo(
+  url: string,
+  playback: ClipPlayback = "proxy",
+): { url: string; hasAudio: boolean } | undefined {
   const id = redgifsIdFromMediaUrl(url);
   if (!id) return undefined;
   const path = url.split(/[?#]/)[0];
   if (!/\.(?:mp4|webm)$/i.test(path)) return undefined;
-  return { url: redgifsProxyUrl(id), hasAudio: !/-silent\.(?:mp4|webm)$/i.test(path) };
+  return {
+    url: playback === "direct" ? url : redgifsProxyUrl(id),
+    hasAudio: !/-silent\.(?:mp4|webm)$/i.test(path),
+  };
 }
 
 /**
@@ -262,7 +273,10 @@ function previewRedditVideo(data: Record<string, unknown>): FlickVideo | undefin
   return redditVideoFromMedia({ reddit_video: preview.reddit_video_preview });
 }
 
-export function parseRedditPost(raw: unknown): FlickPost | null {
+export function parseRedditPost(
+  raw: unknown,
+  playback: ClipPlayback = "proxy",
+): FlickPost | null {
   const listing = asRecord(raw);
   const data = asRecord(listing?.data) ?? listing;
   if (!data) return null;
@@ -307,7 +321,7 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
   // A post that links a redgifs clip file directly (…/Foo.mp4, or the `-silent`
   // cut) is a video in its own right. The id comes along with it, so the server
   // can still upgrade it to the HD copy with sound when the API cooperates.
-  const redgifsMedia = url ? redgifsMediaVideo(url) : undefined;
+  const redgifsMedia = url ? redgifsMediaVideo(url, playback) : undefined;
   if (!video && redgifsMedia) {
     video = {
       url: redgifsMedia.url,
@@ -382,7 +396,10 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
   return post;
 }
 
-export function parseListingChildren(raw: unknown): {
+export function parseListingChildren(
+  raw: unknown,
+  playback: ClipPlayback = "proxy",
+): {
   posts: FlickPost[];
   after: string | null;
 } {
@@ -392,7 +409,7 @@ export function parseListingChildren(raw: unknown): {
   const posts: FlickPost[] = [];
   if (Array.isArray(children)) {
     for (const child of children) {
-      const parsed = parseRedditPost(child);
+      const parsed = parseRedditPost(child, playback);
       if (parsed) posts.push(parsed);
     }
   }
