@@ -1,6 +1,5 @@
+import { refreshDeck } from "@/lib/feed/load";
 import { redditExchangeCode } from "@/lib/reddit/functions";
-import { loadAllSaved } from "@/lib/reddit/load-saved";
-import { shuffleInPlace } from "@/lib/utils";
 import { useFlick } from "@/store/flick";
 
 type PendingOauth = {
@@ -55,9 +54,11 @@ export async function completeOAuthCode(code: string, state: string): Promise<vo
       clientId: saved.clientId,
     };
     store.setSession(session);
-    const posts = await loadAllSaved(session);
-    store.setPosts(shuffleInPlace(posts), "saved");
     sessionStorage.removeItem("flick.oauth");
+    // Straight into the deck, X lane included: the person has just gone to
+    // some trouble to sign in, and making them press shuffle afterwards would
+    // hide whether the mix actually worked.
+    await refreshDeck({ reddit: "saved" });
   } catch (err) {
     store.setError(err instanceof Error ? err.message : "OAuth failed.");
     store.setScreen("connect");

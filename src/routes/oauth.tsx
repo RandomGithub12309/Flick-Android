@@ -1,10 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { refreshDeck } from "@/lib/feed/load";
 import {
   redditExchangeCode,
 } from "@/lib/reddit/functions";
-import { loadAllSaved } from "@/lib/reddit/load-saved";
-import { shuffleInPlace } from "@/lib/utils";
 import { useFlick } from "@/store/flick";
 
 export const Route = createFileRoute("/oauth")({ component: OauthPage });
@@ -77,10 +76,9 @@ async function completeInPlace(
       clientId: saved.clientId,
     };
     useFlick.getState().setSession(session);
-    setStatus("Pulling your saved posts…");
-    const posts = await loadAllSaved(session);
-    useFlick.getState().setPosts(shuffleInPlace(posts), "saved");
+    setStatus("Pulling your deck…");
     sessionStorage.removeItem("flick.oauth");
+    await refreshDeck({ reddit: "saved" });
     window.location.replace("/");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : "OAuth failed.");

@@ -4,6 +4,8 @@ import { Dices, ExternalLink, LogOut, Volume2, VolumeX } from "lucide-react";
 type Props = {
   muted: boolean;
   permalink: string;
+  /** Which host this post came from — the link out goes there, not to Reddit. */
+  sourceLabel?: string;
   onShuffle: () => void;
   onToggleMute: () => void;
   onSignOut?: () => void;
@@ -35,6 +37,7 @@ function RailButton({
 export function ActionRail({
   muted,
   permalink,
+  sourceLabel = "Reddit",
   onShuffle,
   onToggleMute,
   onSignOut,
@@ -56,7 +59,7 @@ export function ActionRail({
         <span className="flex size-12 items-center justify-center rounded-full bg-bg/45 shadow-[var(--shadow-border)] backdrop-blur-sm">
           <ExternalLink className="size-5" />
         </span>
-        <span className="text-xs font-medium text-fg/90">Reddit</span>
+        <span className="text-xs font-medium text-fg/90">{sourceLabel}</span>
       </a>
       {onSignOut ? (
         <RailButton label="Out" onClick={onSignOut}>
