@@ -20,7 +20,15 @@ import type { FlickPost } from "../reddit/types";
 
 /** One saved tweet, as far as the export describes it. */
 export type BookmarkEntry = {
-  /** Tweet id, digits only. Every entry has one: it is the join key. */
+  /**
+   * Tweet id, digits only — or, for a row that is nothing but a media file, a
+   * stable synthetic key derived from that URL (`synthetic` says which).
+   *
+   * Every entry has one because it is the join key for dedupe, the cache and
+   * device storage. A *derived* key is acceptable for persistence; a *guessed*
+   * tweet id is not, which is why the importer refuses to invent one and hands
+   * an id-less row to X's real id instead — see `fileKey`.
+   */
   id: string;
   /** Canonical status URL, so the share and open-link work without the API. */
   url?: string;
@@ -32,6 +40,11 @@ export type BookmarkEntry = {
   createdAt?: number;
   /** Media URLs the export carried. Present means playable with no network. */
   mediaUrls?: string[];
+  /**
+   * True when there is no tweet id behind `id` — the row was a video address on
+   * its own, so it plays but cannot be looked up, badged or re-found on x.com.
+   */
+  synthetic?: boolean;
   /**
    * The whole tweet object, when the export was JSON.
    *

@@ -39,8 +39,12 @@ export async function loadTwitterBookmarks(source: TwitterSource): Promise<Twitt
       continue;
     }
     // Deduped against the file's own posts so a tweet described in two rows of
-    // the same export is not also looked up.
-    if (!seen.has(`x_${entry.id}`)) needingLookup.push(entry.id);
+    // the same export is not also looked up. Synthetic keys (a row that was only
+    // ever a media URL) are skipped: there is no tweet behind them to ask about,
+    // and the endpoint would reject the id outright.
+    if (!entry.synthetic && /^\d{1,25}$/.test(entry.id) && !seen.has(`x_${entry.id}`)) {
+      needingLookup.push(entry.id);
+    }
   }
 
   const notes: string[] = [];

@@ -57,7 +57,7 @@ describe("CSV exports", () => {
     const file = csv([
       "tweet id,tweet text,media urls",
       `${ID},"He said ""hi"", then left",${MP4}`,
-      `${ID},"two
+      `1675000000000000042,"two
 lines",${MP4}`,
     ]);
     const entries = parseBookmarksFile(file, "b.csv").entries;
@@ -85,6 +85,23 @@ lines",${MP4}`,
     assert.equal(entry.id.length, 19);
   });
 
+  it("keeps one entry per tweet, and the richer row when they differ", () => {
+    const imported = parseBookmarksFile(
+      csv(["tweet id,tweet text", `${ID},first`, `${ID},second`]),
+      "dupes.csv",
+    );
+    assert.equal(imported.entries.length, 1);
+    assert.equal(imported.entries[0]?.title, "first");
+    // The case that matters: a library export lists a bookmark twice, once bare
+    // and once with media. "First one wins" would drop the media and the slide.
+    const withMedia = parseBookmarksFile(
+      csv(["tweet id,media urls", ID, `${ID},${MP4}`]),
+      "folders.csv",
+    );
+    assert.equal(withMedia.entries.length, 1);
+    assert.ok(withMedia.entries[0]?.mediaUrls?.length);
+  });
+
   it("counts rows it could not read instead of hiding them", () => {
     const imported = parseBookmarksFile(
       csv(["tweet id,text", `${ID},ok`, ",no id here", "abc,also no id"]),
@@ -104,7 +121,7 @@ lines",${MP4}`,
 
   it("falls back to a pasted list when the first line is no header", () => {
     const imported = parseBookmarksFile(
-      csv([`https://x.com/nasa/status/${ID}`, ID, "// a comment, ignored"]),
+      csv([`https://x.com/nasa/status/${ID}`, "1675000000000000042", "// a comment, ignored"]),
       "notes.txt",
     );
     assert.equal(imported.format, "ids");
@@ -255,11 +272,75 @@ describe("playability of a file-only post", () => {
   });
 });
 
+describe("pasting links, with and without the video address", () => {
+  // This is the shape a person reaches for when they have no API access at all,
+  // so the difference between the two forms is the whole feature: a status link
+  // names a tweet, and a tweet is not playable; the media address is.
+  const LINK = `https://x.com/reidnicole47031/status/${ID}/video/1`;
+  const VIDEO = `https://video.twimg.com/ext_tw_video/${ID}/pu/vid/1280x720/Dr9kQ2pV.mp4?tag=12`;
+
+  it("a status link alone is a lookup, not a slide", () => {
+    const imp = parseBookmarksFile(LINK, "paste");
+    assert.equal(imp.entries[0]?.id, ID);
+    assert.equal(imp.entries[0]?.synthetic, undefined);
+    assert.equal(postFromEntry(imp.entries[0] as BookmarkEntry), null);
+  });
+
+  it("the same line plus a copied video address plays immediately", () => {
+    for (const sep of [" ", ", ", "\t", " ,"]) {
+      const imp = parseBookmarksFile(`${LINK}${sep}${VIDEO}`, "paste");
+      const post = postFromEntry(imp.entries[0] as BookmarkEntry) as FlickPost;
+      assert.equal(post.video?.url, VIDEO, `separator ${JSON.stringify(sep)}`);
+      // And it still links out to the tweet, because the page link was there.
+      assert.equal(post.permalink, LINK);
+      assert.equal(post.account, "reidnicole47031");
+    }
+  });
+
+  it("lifts digits out of a bare id line but never out of a media path", () => {
+    assert.equal(postFromEntry(parseBookmarksFile(ID, "paste").entries[0] as BookmarkEntry), null);
+    // twimg paths embed the tweet id, so lifting it would *look* right here and
+    // be wrong for every other media URL; the row becomes a file, not a tweet.
+    const only = parseBookmarksFile(VIDEO, "paste").entries[0] as BookmarkEntry;
+    assert.equal(only.synthetic, true);
+    assert.ok(only.id.startsWith("file_"));
+    const post = postFromEntry(only) as FlickPost;
+    assert.equal(post.permalink, VIDEO, "no invented x.com link for a row with no tweet");
+  });
+
+  it("keys a media-only row by its URL, so re-importing does not duplicate it", () => {
+    const a = parseBookmarksFile(VIDEO, "paste").entries[0] as BookmarkEntry;
+    const b = parseBookmarksFile(`${VIDEO}\n${VIDEO}`, "paste").entries;
+    assert.equal(a.id, parseBookmarksFile(VIDEO, "other").entries[0]?.id);
+    assert.equal(b.length, 1, "the same address twice is the same slide");
+  });
+
+  it("counts a photo as media, and an unrelated page as nothing", () => {
+    const photo = parseBookmarksFile("https://pbs.twimg.com/media/DezX8p.jpg", "paste")
+      .entries[0] as BookmarkEntry;
+    assert.equal(postFromEntry(photo)?.kind, "image");
+    assert.throws(
+      () => parseBookmarksFile("https://example.com/article/12345", "paste"),
+      /No tweets/,
+    );
+  });
+
+  it("reads a line of prose around the link", () => {
+    const imp = parseBookmarksFile(`great clip: ${LINK} ${VIDEO} (nsfw-free)`, "paste");
+    assert.equal(imp.entries[0]?.id, ID);
+    assert.equal(postFromEntry(imp.entries[0] as BookmarkEntry)?.video?.url, VIDEO);
+  });
+});
+
 describe("limits", () => {
   it("caps the import rather than swallowing a database", () => {
+    // Built as strings, not arithmetic: `1675000000000000000 + i` in floating
+    // point rounds every value to the same number — the exact precision loss the
+    // importer guards against — and dedupe would then be right to collapse 3050
+    // identical rows into one.
     const lines = Array.from(
       { length: MAX_ENTRIES + 50 },
-      (_x, i) => `${1_675_000_000_000_000_000 + i}`,
+      (_x, i) => `1675${String(i).padStart(15, "0")}`,
     );
     const imported = parseBookmarksFile(lines.join("\n"), "huge.txt");
     assert.equal(imported.entries.length, MAX_ENTRIES);
