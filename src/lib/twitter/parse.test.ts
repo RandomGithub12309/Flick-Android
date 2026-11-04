@@ -1,14 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
-  isHandle,
-  normalizeHandle,
-  parseSyndicationTimeline,
-  parseTweet,
-  parseUserTweets,
-  pickMp4Variant,
-  userIdFromLookup,
-} from "./parse.ts";
+import { isHandle, normalizeHandle, parseTweet, parseTweetList, pickMp4Variant } from "./parse.ts";
 import type { FlickPost, FlickVideo } from "../reddit/types.ts";
 
 /**
@@ -17,7 +9,7 @@ import type { FlickPost, FlickVideo } from "../reddit/types.ts";
  * into the shape the slide already understands, nothing downstream has to know.
  *
  * The two payload shapes are pinned on purpose — the API returns v2 (`text`,
- * `public_metrics`, media in `includes`), the public embed feed returns v1.1
+ * `public_metrics`, media in `includes`), a JSON bookmarks export returns v1.1
  * (`full_text`, `favorite_count`, media inline) — because a parser that only
  * handles one would show a deck with no X posts in it and no error.
  */
@@ -185,10 +177,9 @@ describe("v2 payload (official API)", () => {
   it("applies the same content bar the Reddit lane has", () => {
     // Not a moderation stance — Flick shows NSFW and blurs nothing — but the one
     // rule both hosts must share, so adding X can't open a way around it.
-    const post = parseTweet(
-      v2Tweet({ text: "collecting preteen stuff https://t.co/aa" }),
-      { mediaById: new Map([["13_1", v2Media()]]) },
-    );
+    const post = parseTweet(v2Tweet({ text: "collecting preteen stuff https://t.co/aa" }), {
+      mediaById: new Map([["13_1", v2Media()]]),
+    });
     assert.equal(post, null);
   });
 
@@ -225,18 +216,15 @@ describe("v2 payload (official API)", () => {
     assert.equal(post.title, "this is unreal");
   });
 
-  it("parses the expansions envelope and the page cursor", () => {
-    const parsed = parseUserTweets(
-      {
-        data: [v2Tweet()],
-        includes: { media: [v2Media()], users: [{ id: "u1", username: "NASA", name: "NASA" }] },
-        meta: { result_count: 1, next_token: "abc" },
-      },
-      "nasa",
-    );
-    assert.equal(parsed.posts.length, 1);
-    assert.equal(parsed.posts[0]?.account, "nasa");
-    assert.equal(parsed.after, "abc");
+  it("joins the expansions envelope a lookup returns", () => {
+    const posts = parseTweetList({
+      data: [v2Tweet()],
+      includes: { media: [v2Media()], users: [{ id: "u1", username: "NASA", name: "NASA" }] },
+    });
+    assert.equal(posts.length, 1);
+    // The author comes from the expansion, not from whoever asked for the tweet:
+    // an import is other people's posts, and the badge must name the poster.
+    assert.equal(posts[0]?.account, "nasa");
   });
 
   it("survives a malformed response with no posts instead of throwing", () => {
@@ -247,13 +235,13 @@ describe("v2 payload (official API)", () => {
       { data: [{}] },
       { includes: { media: null } },
     ]) {
-      assert.doesNotThrow(() => parseUserTweets(body, "nasa"));
-      assert.equal(parseUserTweets(body, "nasa").posts.length, 0);
+      assert.doesNotThrow(() => parseTweetList(body));
+      assert.equal(parseTweetList(body).length, 0);
     }
   });
 });
 
-describe("embed payload (public timeline)", () => {
+describe("v1.1 payload (a tweet object from an exported file)", () => {
   const tweet = {
     id_str: "1675187969420828672",
     full_text: "Earth from the ISS https://t.co/xyz123",
@@ -287,7 +275,7 @@ describe("embed payload (public timeline)", () => {
     },
   };
 
-  it("reads the v1.1-shaped tweet the widget renders", () => {
+  it("reads the v1.1-shaped tweet an archive or exporter writes", () => {
     const post = parseTweet(tweet) as FlickPost;
     assert.equal(post.kind, "video");
     assert.equal(post.video?.url, "https://video.twimg.com/a/pu/vid/720x1280/high.mp4");
@@ -297,18 +285,6 @@ describe("embed payload (public timeline)", () => {
     assert.equal(post.score, 1200);
     assert.equal(post.title, "Earth from the ISS");
     assert.equal(post.permalink, "https://x.com/nasa/status/1675187969420828672");
-  });
-
-  it("pulls the tweets out of the Next.js payload, and shrugs at a page without one", () => {
-    const html = `<html><head></head><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
-      { props: { pageProps: { timeline: { entries: [{ entry_id: "1", content: { tweet } }] } } } },
-    )}</script></body></html>`;
-    const posts = parseSyndicationTimeline(html);
-    assert.equal(posts.length, 1);
-    assert.equal(posts[0]?.kind, "video");
-    // Text-only entries are what a real profile is mostly made of.
-    assert.deepEqual(parseSyndicationTimeline("<html><body>nope</body></html>"), []);
-    assert.deepEqual(parseSyndicationTimeline('<script id="__NEXT_DATA__">{broken'), []);
   });
 
   it("skips a boost whose clip is the original post's", () => {
@@ -325,7 +301,7 @@ describe("embed payload (public timeline)", () => {
   });
 });
 
-describe("handles", () => {
+describe("handles — read off the export, not typed into a box", () => {
   it("accepts whatever form a person pastes", () => {
     assert.equal(normalizeHandle("@NASA"), "nasa");
     assert.equal(normalizeHandle(" https://x.com/NASA/with_replies "), "nasa");
@@ -337,12 +313,6 @@ describe("handles", () => {
     assert.equal(isHandle("not a handle"), false);
     assert.equal(isHandle("way_too_long_handle_for_x"), false);
     assert.equal(isHandle(""), false);
-  });
-
-  it("reads the user lookup, including an id pasted as a handle", () => {
-    assert.equal(userIdFromLookup({ data: { id: "45", username: "nasa" } }), "45");
-    assert.equal(userIdFromLookup({ data: { id: undefined, username: "12" } }), "12");
-    assert.equal(userIdFromLookup({ errors: [{ detail: "Not found" }] }), undefined);
   });
 });
 

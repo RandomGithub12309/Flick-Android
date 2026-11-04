@@ -1,19 +1,20 @@
 import { originsIn } from "@/lib/feed/mix";
 import { loadDemoFeed, loadSavedFeed } from "@/lib/reddit/loader";
-import { loadTwitterFeed, twitterReady } from "@/lib/twitter/loader";
+import { loadTwitterBookmarks, twitterReady } from "@/lib/twitter/loader";
 import { useFlick } from "@/store/flick";
 import type { FlickPost } from "@/lib/reddit/types";
-import type { TwitterAccount, TwitterFeed } from "@/lib/twitter/types";
+import type { HydrationStats, TwitterSource } from "@/lib/twitter/types";
 import type { FeedSource } from "@/store/flick";
 
 /**
  * Pulling the deck.
  *
  * The lanes are fetched at the same time and either may fail without stopping
- * the other: a dead Bearer token or a rate-limited embed feed should still leave
- * a person's saved posts to play, and an expired Reddit session should still
- * leave the X account. So the lanes run through `allSettled` and a failed one
- * comes back as a notice on the feed rather than an error screen.
+ * the other: an X import whose ids cannot be resolved should still leave a
+ * person's saved posts to play, and an expired Reddit session should still
+ * leave the bookmarks that came with media in the file. So the lanes run through
+ * `allSettled` and a failed one comes back as a notice on the feed rather than
+ * an error screen.
  *
  * Nothing playable at all is the one case that keeps the user on the landing
  * screen, because there is nothing to show them.
@@ -23,7 +24,7 @@ export type RedditLane = "saved" | "demo" | "off";
 export type FeedRequest = {
   /** Which Reddit feed to pull: the account's saves, the public mix, or neither. */
   reddit: RedditLane;
-  /** Pull the configured X account, when one is configured. */
+  /** Pull the imported X bookmarks, when a file has been imported. */
   twitter: boolean;
 };
 
@@ -40,9 +41,8 @@ export type FeedResult = {
   /** Half-truths about a lane, shown over the feed instead of blocking it. */
   notice: string | null;
   failures: LaneFailure[];
-  /** Handle X answered for, and how it was reached. */
-  twitterHandle: string | null;
-  transport: TwitterFeed["transport"] | null;
+  /** What the lookup half of the X lane did, for the settings screen. */
+  hydration: HydrationStats | null;
 };
 
 function messageOf(err: unknown, fallback: string): string {
@@ -58,7 +58,7 @@ function messageOf(err: unknown, fallback: string): string {
  */
 export function requestFor(state: {
   session: { username: string } | null;
-  twitter: TwitterAccount | null;
+  twitter: TwitterSource | null;
   includeTwitter: boolean;
   includeReddit: boolean;
 }): FeedRequest {
@@ -74,7 +74,17 @@ export function defaultRequest(): FeedRequest {
   return requestFor({ session, twitter, includeTwitter, includeReddit });
 }
 
+/** How many bookmark entries are queued behind the per-shuffle lookup limit. */
+function unresolvedBeyondLimit(source: TwitterSource | null): number {
+  const entries = source?.bookmarks?.entries ?? [];
+  if (entries.length === 0) return 0;
+  return Math.max(0, entries.length - LOOKUP_BUDGET_HINT);
+}
+
 type Job = { lane: LaneName; run: () => Promise<FlickPost[]> };
+
+/** Kept in sync with `HYDRATE_LIMIT` in the loader by the note it produces. */
+const LOOKUP_BUDGET_HINT = 200;
 
 /**
  * Fetch every lane and return one mixed deck, without touching the screen.
@@ -87,16 +97,18 @@ export async function loadDeck(
   onProgress?: (count: number) => void,
 ): Promise<FeedResult> {
   const state = useFlick.getState();
-  const account = state.twitter;
+  const source = state.twitter;
   // "Saved" without a session is a request nobody can honour, and answering it
   // with an empty deck would read as a broken shuffle: fall back to the mix.
   const reddit: RedditLane = request.reddit === "saved" && !state.session ? "demo" : request.reddit;
-  const wantTwitter = request.twitter && twitterReady(account);
+  const wantTwitter = request.twitter && twitterReady(source);
 
   // A holder rather than a local `let`: an assignment made inside a job's
   // closure is invisible to narrowing, and the compiler reads the local as
   // still-null on the other side of the await.
-  const twitter: { feed: TwitterFeed | null } = { feed: null };
+  const twitter: { feed: Awaited<ReturnType<typeof loadTwitterBookmarks>> | null } = {
+    feed: null,
+  };
   const jobs: Job[] = [];
   if (reddit === "saved" && state.session) {
     const session = state.session;
@@ -107,25 +119,19 @@ export async function loadDeck(
   } else if (reddit === "demo") {
     jobs.push({ lane: "reddit", run: () => loadDemoFeed() });
   }
-  if (wantTwitter && account) {
+  if (wantTwitter && source) {
     jobs.push({
       lane: "twitter",
       run: async () => {
-        twitter.feed = await loadTwitterFeed(account);
-        return twitter.feed.posts;
+        const feed = await loadTwitterBookmarks(source);
+        twitter.feed = feed;
+        return feed.posts;
       },
     });
   }
 
   if (jobs.length === 0) {
-    return {
-      posts: [],
-      source: "demo",
-      notice: null,
-      failures: [],
-      twitterHandle: null,
-      transport: null,
-    };
+    return { posts: [], source: "demo", notice: null, failures: [], hydration: null };
   }
 
   const settled = await Promise.allSettled(jobs.map((job) => job.run()));
@@ -145,7 +151,7 @@ export async function loadDeck(
       lane,
       message: messageOf(
         result.reason,
-        lane === "twitter" ? "Could not load that X account." : "Reddit did not answer.",
+        lane === "twitter" ? "Could not read that bookmarks import." : "Reddit did not answer.",
       ),
     });
   }
@@ -155,7 +161,7 @@ export async function loadDeck(
   const feed = twitter.feed;
   const origins = originsIn(posts);
   const onlyTwitter = origins.length === 1 && origins[0] === "twitter";
-  const source: FeedSource =
+  const feedSource: FeedSource =
     reddit === "saved" && answered.has("reddit") ? "saved" : onlyTwitter ? "twitter" : "demo";
 
   const notes: string[] = failures.map((failure) =>
@@ -163,25 +169,30 @@ export async function loadDeck(
       ? `X lane skipped — ${failure.message}`
       : `Reddit lane skipped — ${failure.message}`,
   );
-  // A configured account that answered with nothing playable looks exactly like
-  // mixing being broken from the outside, so say which of the two it is.
-  if (
-    wantTwitter &&
-    feed &&
-    feed.posts.length === 0 &&
-    !failures.some((f) => f.lane === "twitter")
-  ) {
-    notes.push(`@${account?.handle ?? ""} has no playable posts in its last few dozen.`);
+  // An import that produced nothing looks exactly like mixing being broken from
+  // the outside, so say which of the two it is: a file of text-only tweets, or a
+  // file whose media X will no longer serve.
+  if (wantTwitter && feed && feed.posts.length === 0 && notes.length === 0) {
+    const count = source?.bookmarks?.entries.length ?? 0;
+    notes.push(
+      `None of the ${count} bookmark${count === 1 ? "" : "s"} in that file has playable media — a text-only export shows up like this.`,
+    );
+  }
+  const beyond = unresolvedBeyondLimit(source);
+  if (feed && beyond > 0 && feed.posts.length > 0) {
+    notes.push(`${beyond} more bookmarks are on file than one shuffle looks up.`);
   }
   if (feed?.warning) notes.push(feed.warning);
+  if (source?.bookmarks?.shrunk) {
+    notes.push("That file was trimmed to fit this device's storage.");
+  }
 
   return {
     posts,
-    source,
+    source: feedSource,
     notice: notes.filter(Boolean).join(" ") || null,
     failures,
-    twitterHandle: feed ? feed.username : null,
-    transport: feed ? feed.transport : null,
+    hydration: feed?.stats ?? null,
   };
 }
 
@@ -197,8 +208,10 @@ export async function refreshDeck(request?: Partial<FeedRequest>): Promise<boole
   const labels: string[] = [];
   if (merged.reddit === "saved") labels.push("your saved posts");
   else if (merged.reddit === "demo") labels.push("the Reddit mix");
-  const handle = store.twitter?.handle;
-  if (merged.twitter && handle) labels.push(`@${handle}`);
+  const bookmarks = store.twitter?.bookmarks;
+  if (merged.twitter && bookmarks) {
+    labels.push(`${bookmarks.entries.length} X bookmarks`);
+  }
   store.setLoading(labels.length > 0 ? `Pulling ${labels.join(" + ")}…` : "Pick a source first", 0);
 
   const result = await loadDeck(merged, (count) =>
@@ -208,7 +221,7 @@ export async function refreshDeck(request?: Partial<FeedRequest>): Promise<boole
     store.setScreen("home");
     store.setError(
       result.failures.map((failure) => failure.message).join(" ") ||
-        "Nothing playable came back — that account may post no video, or you have saved none.",
+        "Nothing playable came back — that file may hold no video, or you have saved none.",
     );
     return false;
   }

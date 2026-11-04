@@ -26,15 +26,18 @@ export function Landing() {
   // Derived from subscribed state, so the labels move with the toggles instead
   // of describing whatever the lanes were when this screen last rendered.
   const lanes = requestFor({ session, twitter, includeTwitter, includeReddit });
-  const handle = lanes.twitter ? (twitter?.handle ?? "") : "";
-  const mixing = lanes.reddit !== "off" && Boolean(handle);
-  const nothingOn = lanes.reddit === "off" && !handle;
+  // "Bookmarks queued", not "bookmarks in the deck": the mixer caps the lane, so
+  // the file's size is the honest number to put on a button.
+  const bookmarks = lanes.twitter ? (twitter?.bookmarks?.entries.length ?? 0) : 0;
+  const mixing = lanes.reddit !== "off" && bookmarks > 0;
+  const nothingOn = lanes.reddit === "off" && bookmarks === 0;
+  const xLabel = bookmarks > 0 ? `${bookmarks.toLocaleString()} bookmarks` : "X";
   const primaryLabel = nothingOn
     ? "Turn a source on"
     : mixing
-      ? `Shuffle Reddit + @${handle}`
-      : handle
-        ? `Shuffle @${handle}`
+      ? `Shuffle Reddit + ${xLabel}`
+      : bookmarks > 0
+        ? `Shuffle ${xLabel}`
         : session
           ? `Shuffle u/${session.username}`
           : "Try a sample shuffle";
@@ -82,8 +85,8 @@ export function Landing() {
           <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted">18+ player</p>
           <h1 className="mt-3 text-5xl font-semibold tracking-tight text-fg">Flick</h1>
           <p className="mt-4 max-w-sm text-base leading-normal text-muted">
-            Full-screen Reddit saves and an X account, shuffled into one deck. Sound on. No blur, no
-            feed filters.
+            Full-screen Reddit saves and your X bookmarks, shuffled into one deck. Sound on. No
+            blur, no feed filters.
           </p>
           <Button size="lg" className="mt-8 w-full" onClick={acceptAge}>
             I am 18 or older
@@ -102,7 +105,7 @@ export function Landing() {
           </p>
           <h1 className="mt-4 text-6xl font-semibold tracking-tight text-fg">Flick</h1>
           <p className="mt-4 max-w-sm text-lg leading-snug text-muted">
-            Your saved Reddit posts and any X account, mixed into one swipeable deck.
+            Your saved Reddit posts and your X bookmarks, mixed into one swipeable deck.
           </p>
           <ul className="mt-8 space-y-3 text-sm text-muted">
             <li className="flex items-center gap-3">

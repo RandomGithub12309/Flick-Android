@@ -336,56 +336,18 @@ export function parseTweet(raw: unknown, ctx: TweetParseContext = {}): FlickPost
 }
 
 /**
- * The `__NEXT_DATA__` blob of the embeddable-timeline page.
+ * `GET /2/tweets?ids=` — the lookup the bookmarks import uses — into posts.
  *
- * X offers no keyless timeline API; this is the payload the
- * `syndication.twitter.com` embed widget renders, and the only account feed
- * reachable without a token. It is undocumented, capped near the twenty newest
- * posts, and X has broken it before — so every accessor is optional and a
- * miss returns no posts rather than throwing.
+ * `/2/users/:id/tweets` returns an identically shaped payload, so the same
+ * reader covers both, and nothing here assumes the tweets share an author: an
+ * import is a pile of other people&rsquo;s posts, and each slide is badged by the
+ * author on the tweet rather than by a configured account.
+ *
+ * Only playable tweets come back. The caller counts the ids that produced
+ * nothing, because "X had no answer" and "X answered with a text post" are two
+ * different things to say to a person looking at a short deck.
  */
-export function parseSyndicationTimeline(html: string): FlickPost[] {
-  const match = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
-  const payload = match?.[1]?.trim();
-  if (!payload) return [];
-  let root: Record<string, unknown> | null = null;
-  try {
-    root = asRecord(JSON.parse(payload));
-  } catch {
-    // Some deployments serve the blob HTML-escaped; retry once decoded.
-    try {
-      root = asRecord(JSON.parse(decodeEntities(payload)));
-    } catch {
-      return [];
-    }
-  }
-  const entries = asArray(asRecord(asRecord(asRecord(root?.props)?.pageProps)?.timeline)?.entries);
-  const posts: FlickPost[] = [];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    const record = asRecord(entry);
-    const tweet = asRecord(asRecord(record?.content)?.tweet) ?? asRecord(record?.tweet);
-    if (!tweet) continue;
-    const post = parseTweet(tweet);
-    if (!post || seen.has(post.id)) continue;
-    seen.add(post.id);
-    posts.push(post);
-  }
-  return posts;
-}
-
-export type UserTweetsResult = {
-  posts: FlickPost[];
-  after: string | null;
-  /** Canonical username X resolved the requested handle to. */
-  username: string;
-};
-
-/**
- * `GET /2/users/:id/tweets` — and the identically shaped `/2/tweets?ids=` —
- * into posts, joining the `includes` expansions the request asked for.
- */
-export function parseUserTweets(json: unknown, account: string): UserTweetsResult {
+export function parseTweetList(json: unknown, account = ""): FlickPost[] {
   const root = asRecord(json);
   const includes = asRecord(root?.includes);
   const mediaById = new Map<string, TweetMedia>();
@@ -414,28 +376,48 @@ export function parseUserTweets(json: unknown, account: string): UserTweetsResul
     if (!tweet) continue;
     // The API names the author by id, and the slide badge needs the handle —
     // stitch the expanded user onto the tweet before parsing.
-    const author = asString(tweet.author_id)
-      ? usersById.get(asString(tweet.author_id)!)
-      : undefined;
+    const authorId = asString(tweet.author_id);
+    const author = authorId ? usersById.get(authorId) : undefined;
     if (author && !tweet.user) tweet.user = author;
     const post = parseTweet(tweet, { mediaById, referencedById, account });
     if (!post || seen.has(post.id)) continue;
     seen.add(post.id);
     posts.push(post);
   }
-  return {
-    posts,
-    after: asString(asRecord(root?.meta)?.next_token) ?? null,
-    username: posts.find((post) => post.account)?.account ?? normalizeHandle(account),
-  };
+  return posts;
 }
 
-/** `GET /2/users/by/username/:username` → the numeric id every other call needs. */
-export function userIdFromLookup(json: unknown): string | undefined {
-  const data = asRecord(asRecord(json)?.data);
-  const id = asString(data?.id);
-  if (id) return id;
-  // Accept an id pasted into the handle field, so one box takes either form.
-  const username = asString(data?.username);
-  return username && /^\d{1,25}$/.test(username) ? username : undefined;
+/** Ids present in a lookup response, playable or not — the denominator for "missing". */
+export function tweetIdsIn(json: unknown): string[] {
+  const ids: string[] = [];
+  for (const entry of asArray(asRecord(json)?.data)) {
+    const id = asString(asRecord(entry)?.id);
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Media URLs a tweet object carries, best first.
+ *
+ * The importer keeps whole tweet objects when the export had them, because they
+ * beat any CSV column. When the file is too big to persist those objects, this
+ * salvages the one thing that makes a slide work — the playable file — so
+ * shrinking the import does not shrink the deck.
+ */
+export function mediaUrlsOfTweet(raw: unknown): string[] {
+  const wrapper = asRecord(raw);
+  if (!wrapper) return [];
+  const tweet = asRecord(wrapper.tweet) ?? asRecord(asRecord(wrapper.content)?.tweet) ?? wrapper;
+  const urls: string[] = [];
+  for (const media of mediaForTweet(tweet, undefined)) {
+    const video = videoFromMedia(media);
+    if (video) {
+      urls.push(video.url);
+      continue;
+    }
+    const image = imageFromMedia(media);
+    if (image) urls.push(image.url);
+  }
+  return urls;
 }
