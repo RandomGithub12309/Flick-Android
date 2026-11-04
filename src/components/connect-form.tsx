@@ -3,7 +3,6 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { TwitterPanel } from "@/components/twitter-panel";
 import { refreshDeck } from "@/lib/feed/load";
 import { trackAuthorizePopup } from "@/lib/reddit/authorize-watch";
 import { NATIVE_REDIRECT_URI, isNative, openNativeAuthorize } from "@/lib/reddit/native-oauth";
@@ -81,10 +80,9 @@ export function ConnectForm() {
     setBusy(true);
     setError(null);
     try {
-      // Reddit's public mix on its own, deliberately: this button is what you
-      // press before any of it is configured, and a lane that isn't set up yet
-      // shouldn't decide whether the sample works.
-      await refreshDeck({ reddit: "demo", twitter: false });
+      // The public mix, deliberately: this is the button you press before any
+      // of this is configured, so it must not depend on a session.
+      await refreshDeck({ reddit: "demo" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Demo feed failed.");
       setScreen("connect");
@@ -106,14 +104,14 @@ export function ConnectForm() {
           <ArrowLeft className="size-5" />
         </Button>
         <div>
-          <h1 className="text-lg font-semibold">Sources</h1>
+          <h1 className="text-lg font-semibold">Reddit</h1>
           <p className="text-sm text-muted">
-            Reddit&rsquo;s saved posts and one X account, mixed into a single deck.
+            Connect the account whose saves you want, or play the public mix.
           </p>
         </div>
       </header>
 
-      <h2 className="mt-2 text-xs font-medium uppercase tracking-[0.18em] text-muted">Reddit</h2>
+      <h2 className="mt-2 text-xs font-medium uppercase tracking-[0.18em] text-muted">Sign in</h2>
 
       <form
         className="flex flex-col gap-4 pb-6"
@@ -225,9 +223,6 @@ export function ConnectForm() {
         ) : null}
       </form>
 
-      <h2 className="mb-2 mt-4 text-xs font-medium uppercase tracking-[0.18em] text-muted">X</h2>
-      <TwitterPanel />
-
       <Button
         size="md"
         variant="secondary"
@@ -240,8 +235,7 @@ export function ConnectForm() {
 
       <p className="mt-auto pt-6 text-xs leading-normal text-subtle">
         Flick never sees your Reddit password — you sign in on reddit.com, and only the access token
-        is stored on this device. Your X bearer token is stored the same way and sent only to
-        Flick&rsquo;s own server.
+        is stored on this device.
       </p>
     </div>
   );

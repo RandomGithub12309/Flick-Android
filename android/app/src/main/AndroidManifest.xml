@@ -7,7 +7,20 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/AppTheme">
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="true">
+
+        <!--
+          usesCleartextTraffic is on because Flick's server normally runs on this
+          device, at http://127.0.0.1:8765 (see capacitor.config.ts), and Android
+          refuses cleartext since API 28. The traffic never leaves the phone. If
+          you point the app at a hosted deployment, make it an https URL — this
+          attribute does not weaken https.
+
+          `cap sync` writes this attribute from server.cleartext; it is also set
+          here so the manifest is correct on a fresh clone, before anyone runs
+          the sync.
+        -->
 
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"

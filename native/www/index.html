@@ -2,21 +2,247 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Flick</title>
     <style>
-      html, body { height: 100%; margin: 0; background: #0b0b0c; color: #eee;
-        font-family: -apple-system, system-ui, sans-serif; display: flex;
-        align-items: center; justify-content: center; text-align: center; }
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        background: #0b0b0c;
+        color: #eee;
+        font:
+          15px/1.5 -apple-system,
+          system-ui,
+          sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      main {
+        max-width: 30em;
+        width: 100%;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 6px;
+        letter-spacing: -0.01em;
+      }
+      p,
+      li {
+        color: #a1a1aa;
+      }
+      code {
+        color: #eee;
+        background: #1f1f23;
+        border-radius: 4px;
+        padding: 1px 5px;
+        font-size: 13px;
+      }
+      button,
+      input {
+        font: inherit;
+        border-radius: 10px;
+        border: 1px solid #33333a;
+        background: #1f1f23;
+        color: #eee;
+        padding: 10px 12px;
+      }
+      button {
+        background: #eee;
+        color: #0b0b0c;
+        font-weight: 600;
+        width: 100%;
+        margin-top: 10px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 10px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+      }
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #f59e0b;
+        margin-right: 8px;
+        vertical-align: 1px;
+      }
+      .quiet {
+        font-size: 13px;
+        color: #71717a;
+      }
     </style>
   </head>
   <body>
     <!--
-      Placeholder only. In production the app is configured (capacitor.config.ts
-      "server.url") to load the live deployed Flick site directly, since Flick
-      needs its server functions (Reddit token exchange, saved-post fetching).
-      This file is just Capacitor's required local fallback / offline screen.
+      This is the shell's own page: the only local asset in the APK. It is shown
+      when `server.url` (capacitor.config.ts) does not answer, which after the
+      self-hosting change means one thing — Flick's server on this device is not
+      running. It retries by navigating (the WebView cannot fetch() across that
+      boundary: an https-origin shell may not make an http request), and stops
+      retrying out loud rather than looping, because a page that silently
+      refreshes forever looks like a hung app.
     -->
-    <p>Connecting to Flick…</p>
+    <main>
+      <p class="quiet"><span class="dot"></span><span id="status">Connecting…</span></p>
+      <h1>Flick&rsquo;s server isn&rsquo;t answering</h1>
+      <p>
+        The app is a shell around a Flick server. This build looks for one on
+        <strong id="target">this device</strong>.
+      </p>
+
+      <div id="waiting">
+        <p>Retrying in <span id="countdown">4</span>s — attempt <span id="tries">1</span> of 8.</p>
+      </div>
+
+      <div id="manual" hidden>
+        <ol>
+          <li>
+            Open <strong>Termux</strong> and start the server: <code>flick start</code>
+            <div class="quiet">
+              Nothing installed yet? See <code>NATIVE_ANDROID.md</code> — it is one
+              <code>curl</code> and one <code>sh</code>.
+            </div>
+          </li>
+          <li>Then come back here and press Open.</li>
+        </ol>
+        <p>
+          Or point this shell at another Flick — a laptop on your network, or a hosted deployment.
+          It is remembered on this device.
+        </p>
+        <input
+          id="url"
+          spellcheck="false"
+          autocapitalize="off"
+          placeholder="http://192.168.1.20:8765"
+        />
+        <div class="row">
+          <button id="save" type="button">Save and open</button>
+          <button id="reset" type="button" class="quiet">Use default</button>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        // Keep in step with LOCAL_SERVER in capacitor.config.ts; the override
+        // field is what makes a different port or host work without a rebuild.
+        var DEFAULT_URL = "http://127.0.0.1:8765";
+        var KEY = "flick.serverUrl";
+        var TRY_KEY = "flick.tries";
+        var MAX_TRIES = 8;
+        var RETRY_MS = 4000;
+
+        function stored(key, fallback) {
+          try {
+            var raw = window.localStorage.getItem(key);
+            return raw === null ? fallback : raw;
+          } catch (e) {
+            return fallback;
+          }
+        }
+
+        function target() {
+          return stored(KEY, DEFAULT_URL) || DEFAULT_URL;
+        }
+
+        // Attempts are counted per minute, not forever: a launcher that had 8
+        // failures yesterday must still retry today without a manual reset.
+        function nextTry() {
+          var state;
+          try {
+            state = JSON.parse(stored(TRY_KEY, "{}"));
+          } catch (e) {
+            state = {};
+          }
+          var now = Date.now();
+          var tries = now - (state.at || 0) > 60000 ? 0 : state.tries || 0;
+          tries += 1;
+          try {
+            window.localStorage.setItem(TRY_KEY, JSON.stringify({ tries: tries, at: now }));
+          } catch (e) {
+            /* private mode: the countdown is then per-load, which is fine */
+          }
+          return tries;
+        }
+
+        var url = target();
+        var tries = nextTry();
+        var manual = document.getElementById("manual");
+        var waiting = document.getElementById("waiting");
+        document.getElementById("target").textContent = url;
+        document.getElementById("url").value = url === DEFAULT_URL ? "" : url;
+
+        function showManual(reason) {
+          document.getElementById("status").textContent = reason;
+          document.querySelector(".dot").style.background = "#ef4444";
+          waiting.hidden = true;
+          manual.hidden = false;
+        }
+
+        function go(at) {
+          window.location.replace(at);
+        }
+
+        if (tries > MAX_TRIES) {
+          showManual("Not reachable");
+        } else {
+          document.getElementById("tries").textContent = String(tries);
+          var left = Math.ceil(RETRY_MS / 1000);
+          document.getElementById("countdown").textContent = String(left);
+          var tick = window.setInterval(function () {
+            left -= 1;
+            if (left <= 0) {
+              window.clearInterval(tick);
+              go(url);
+              return;
+            }
+            document.getElementById("countdown").textContent = String(left);
+          }, 1000);
+          // A server that has just been started should be picked up promptly, so
+          // the first attempt is immediate rather than after the countdown.
+          if (tries === 1) go(url);
+        }
+
+        document.getElementById("save").addEventListener("click", function () {
+          var value = document.getElementById("url").value.trim();
+          if (!/^https?:\/\//i.test(value)) {
+            document.getElementById("url").focus();
+            document.getElementById("status").textContent = "Needs http:// or https://";
+            return;
+          }
+          try {
+            window.localStorage.setItem(KEY, value);
+            window.localStorage.removeItem(TRY_KEY);
+          } catch (e) {
+            /* still worth trying to open it this once */
+          }
+          go(value);
+        });
+
+        document.getElementById("reset").addEventListener("click", function () {
+          try {
+            window.localStorage.removeItem(KEY);
+            window.localStorage.removeItem(TRY_KEY);
+          } catch (e) {
+            /* nothing to clear */
+          }
+          go(DEFAULT_URL);
+        });
+      })();
+    </script>
   </body>
 </html>

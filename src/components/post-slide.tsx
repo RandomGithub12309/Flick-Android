@@ -7,7 +7,6 @@ import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
 import { requestRedgifsClip } from "@/lib/reddit/clip";
 import { audioCandidatesFor } from "@/lib/video-sources";
 import { cn, formatScore, isLandscapeRatio, mediaRatio } from "@/lib/utils";
-import { originOf } from "@/lib/feed/mix";
 
 /** "3h ago" / "4d ago" — a tweet's date matters more than its author, since the
  *  account is the same on every slide. */
@@ -78,7 +77,6 @@ export function PostSlide({
   const lookedUp = useRef(false);
 
   const gallery = post.gallery ?? [];
-  const isTwitter = originOf(post) === "twitter";
   const redgifsId = post.redgifsId;
   const video = clip ?? post.video;
   const image = post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
@@ -269,29 +267,18 @@ export function PostSlide({
           ) : null}
           <div className="max-w-xs pb-6 pr-4">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium text-fg">
-              {/* One badge per host: `r/subreddit` and `@handle` answer the same
-                  question — where on this screen did this come from — and an X
-                  post has no subreddit to name. */}
-              <span className="rounded-full bg-fg/12 px-2.5 py-1">
-                {isTwitter ? `@${post.account || post.author}` : `r/${post.subreddit}`}
-              </span>
+              <span className="rounded-full bg-fg/12 px-2.5 py-1">r/{post.subreddit}</span>
               {post.nsfw ? (
                 <span className="rounded-full bg-danger/20 px-2.5 py-1 text-danger">NSFW</span>
               ) : null}
-              {/* X reports plays, not upvotes; showing likes where a number that
-                  better describes a clip could be read as a bug. */}
-              <span className="tabular-nums text-muted">
-                {formatScore(isTwitter ? (post.views ?? post.score) : post.score)}
-                {isTwitter && post.views ? " views" : ""}
-              </span>
+              <span className="tabular-nums text-muted">{formatScore(post.score)}</span>
             </div>
             <h2 className="text-base font-semibold leading-snug text-balance text-fg">
               {post.title}
             </h2>
             <p className="mt-1 text-sm text-muted">
-              {isTwitter
-                ? `on X${post.createdUtc ? ` · ${timeAgo(post.createdUtc)}` : ""}`
-                : `u/${post.author}`}
+              u/{post.author}
+              {post.createdUtc ? ` · ${timeAgo(post.createdUtc)}` : ""}
             </p>
             {unplayable && redgifsId ? (
               <a
