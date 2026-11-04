@@ -7,6 +7,21 @@ import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
 import { requestRedgifsClip } from "@/lib/reddit/clip";
 import { audioCandidatesFor } from "@/lib/video-sources";
 import { cn, formatScore, isLandscapeRatio, mediaRatio } from "@/lib/utils";
+import { originOf } from "@/lib/feed/mix";
+
+/** "3h ago" / "4d ago" — a tweet's date matters more than its author, since the
+ *  account is the same on every slide. */
+function timeAgo(unixSeconds: number): string {
+  const age = Math.max(0, Date.now() / 1000 - unixSeconds);
+  const hours = age / 3600;
+  if (hours < 1) return `${Math.max(1, Math.round(age / 60))}m ago`;
+  if (hours < 36) return `${Math.round(hours)}h ago`;
+  if (hours < 24 * 30) return `${Math.round(hours / 24)}d ago`;
+  return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
 
 /**
  * How many fresh URLs a slide may ask for before it gives up on playing the
@@ -63,6 +78,7 @@ export function PostSlide({
   const lookedUp = useRef(false);
 
   const gallery = post.gallery ?? [];
+  const isTwitter = originOf(post) === "twitter";
   const redgifsId = post.redgifsId;
   const video = clip ?? post.video;
   const image = post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
@@ -253,16 +269,30 @@ export function PostSlide({
           ) : null}
           <div className="max-w-xs pb-6 pr-4">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium text-fg">
-              <span className="rounded-full bg-fg/12 px-2.5 py-1">r/{post.subreddit}</span>
+              {/* One badge per host: `r/subreddit` and `@handle` answer the same
+                  question — where on this screen did this come from — and an X
+                  post has no subreddit to name. */}
+              <span className="rounded-full bg-fg/12 px-2.5 py-1">
+                {isTwitter ? `@${post.account || post.author}` : `r/${post.subreddit}`}
+              </span>
               {post.nsfw ? (
                 <span className="rounded-full bg-danger/20 px-2.5 py-1 text-danger">NSFW</span>
               ) : null}
-              <span className="tabular-nums text-muted">{formatScore(post.score)}</span>
+              {/* X reports plays, not upvotes; showing likes where a number that
+                  better describes a clip could be read as a bug. */}
+              <span className="tabular-nums text-muted">
+                {formatScore(isTwitter ? (post.views ?? post.score) : post.score)}
+                {isTwitter && post.views ? " views" : ""}
+              </span>
             </div>
             <h2 className="text-base font-semibold leading-snug text-balance text-fg">
               {post.title}
             </h2>
-            <p className="mt-1 text-sm text-muted">u/{post.author}</p>
+            <p className="mt-1 text-sm text-muted">
+              {isTwitter
+                ? `on X${post.createdUtc ? ` · ${timeAgo(post.createdUtc)}` : ""}`
+                : `u/${post.author}`}
+            </p>
             {unplayable && redgifsId ? (
               <a
                 href={redgifsWatchUrl(redgifsId)}

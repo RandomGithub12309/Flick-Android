@@ -1,5 +1,14 @@
 export type MediaKind = "video" | "image" | "gallery" | "text" | "link";
 
+/**
+ * Which host a post was pulled from.
+ *
+ * `FlickPost` is Flick's universal post shape, not a Reddit DTO: the X lane is
+ * normalised into it so one slide and one player handle every source. New
+ * hosts add a tag here and a parser that fills the same fields in.
+ */
+export type FlickOrigin = "reddit" | "twitter";
+
 export type FlickImage = {
   url: string;
   width?: number;
@@ -68,6 +77,25 @@ export type FlickPost = {
   text?: string;
   thumbnail?: string;
   domain?: string;
+  /**
+   * Where this post came from. Unset means Reddit — that is where every post
+   * in Flick started, and the X lane stamps itself explicitly. The slide chrome
+   * (badge, share link) and the mixer both read this, so a post parsed from
+   * either host has to carry its own origin rather than relying on which
+   * loader returned it.
+   */
+  origin?: FlickOrigin;
+  /**
+   * Handle of the X account a Twitter-sourced post came from, without the `@`.
+   * Reddit posts carry `subreddit` for the same slot in the badge.
+   */
+  account?: string;
+  /**
+   * Plays X reports for the clip. Reddit has no equivalent, so its `score`
+   * (upvotes) is what the badge shows; a mixed deck shows each host's own
+   * popularity signal rather than a meaningless common one.
+   */
+  views?: number;
 };
 
 export type RedditSession = {

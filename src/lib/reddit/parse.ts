@@ -1,27 +1,7 @@
+import { isUnsafeMinorContent } from "../content-safety";
+import { asBool, asNumber, asRecord, asString } from "../coerce";
 import { redgifsProxyUrl } from "./redgifs";
 import type { FlickImage, FlickPost, FlickVideo } from "./types";
-
-const MINOR_PATTERN =
-  /\b(loli|shota|child porn|preteen|pre-teen|underage|under.?18|jailbait)\b/i;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asBool(value: unknown): boolean {
-  return value === true;
-}
 
 function decodeUrl(url: string): string {
   return url.replaceAll("&amp;", "&");
@@ -138,10 +118,6 @@ function galleryImages(data: Record<string, unknown>): FlickImage[] | undefined 
     });
   }
   return images.length > 0 ? images : undefined;
-}
-
-function isUnsafeMinorContent(title: string, subreddit: string): boolean {
-  return MINOR_PATTERN.test(title) || MINOR_PATTERN.test(subreddit);
 }
 
 /**
@@ -273,7 +249,7 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
   const subreddit = asString(data.subreddit) ?? "";
   const author = asString(data.author) ?? "[deleted]";
   if (!id || !title) return null;
-  if (isUnsafeMinorContent(title, subreddit)) return null;
+  if (isUnsafeMinorContent(title, subreddit, asString(data.selftext))) return null;
 
   const permalinkPath = asString(data.permalink) ?? `/comments/${id}`;
   const permalink = permalinkPath.startsWith("http")

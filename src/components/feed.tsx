@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActionRail } from "@/components/action-rail";
 import { PostSlide } from "@/components/post-slide";
+import { originOf } from "@/lib/feed/mix";
 import { useFlick } from "@/store/flick";
 
 const THRESHOLD = 72;
@@ -11,12 +12,31 @@ const THRESHOLD = 72;
  */
 const MAX_CONSECUTIVE_SKIPS = 8;
 const SKIP_SETTLE_MS = 400;
+/** How long a lane's "X was skipped" note stays up before it gets out of the way. */
+const NOTICE_MS = 9000;
+
+/**
+ * What the deck is made of, in the corner where the user can check it before
+ * blaming the player for a missing lane. Derived from the posts themselves
+ * rather than from the settings, so it describes what is on screen.
+ */
+function deckLabel(source: string, origins: string[], handle: string): string {
+  const x = handle ? `@${handle}` : "X";
+  const reddit = source === "saved" ? "Saved" : "Shuffle";
+  if (!origins.includes("reddit")) return x;
+  if (!origins.includes("twitter")) return reddit;
+  return `${reddit} + ${x}`;
+}
 
 export function Feed() {
   const posts = useFlick((s) => s.posts);
   const index = useFlick((s) => s.index);
   const muted = useFlick((s) => s.muted);
   const source = useFlick((s) => s.source);
+  const feedOrigins = useFlick((s) => s.feedOrigins);
+  const twitter = useFlick((s) => s.twitter);
+  const notice = useFlick((s) => s.notice);
+  const setNotice = useFlick((s) => s.setNotice);
   const next = useFlick((s) => s.next);
   const prev = useFlick((s) => s.prev);
   const reroll = useFlick((s) => s.reroll);
@@ -106,6 +126,14 @@ export function Feed() {
       }
     };
   }, [skipNotice]);
+
+  // A half-working mix still deserves to be watched, but the reason must not
+  // sit over the video forever — long enough to read, then out of the way.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice, setNotice]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -209,7 +237,7 @@ export function Feed() {
           <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-4 pt-safe">
             <div className="pointer-events-auto pt-3">
               <p className="text-xs font-medium uppercase tracking-widest text-fg/80">
-                {source === "saved" ? "Saved" : "Shuffle"}
+                {deckLabel(source, feedOrigins, twitter?.handle ?? "")}
               </p>
               <p className="tabular-nums text-sm text-muted">
                 {index + 1} / {posts.length}
@@ -233,6 +261,18 @@ export function Feed() {
             </div>
           </header>
 
+          {notice ? (
+            <div className="pointer-events-auto absolute inset-x-0 top-28 z-30 flex justify-center px-6">
+              <button
+                type="button"
+                onClick={() => setNotice(null)}
+                className="rounded-full bg-bg/85 px-3 py-1.5 text-center text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm"
+              >
+                {notice}
+              </button>
+            </div>
+          ) : null}
+
           {skipNotice ? (
             <div className="pointer-events-none absolute inset-x-0 top-20 z-30 flex justify-center px-6">
               <p className="rounded-full bg-bg/80 px-3 py-1.5 text-center text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm">
@@ -244,6 +284,7 @@ export function Feed() {
           <ActionRail
             muted={muted}
             permalink={post.permalink}
+            sourceLabel={originOf(post) === "twitter" ? "X" : "Reddit"}
             onShuffle={reroll}
             onToggleMute={toggleMuted}
             onSignOut={source === "saved" ? signOut : undefined}
