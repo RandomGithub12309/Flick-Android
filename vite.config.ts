@@ -142,6 +142,20 @@ function authPopupPlugin(): Plugin {
   };
 }
 
+/**
+ * Which deployment shape `vite build` emits.
+ *
+ * `vercel` (the default) is the platform's target: per-function handlers behind
+ * Vercel's routing. `node` asks Nitro for `node-server` instead — one
+ * self-contained `.output/` directory you start with `node .output/server/index.mjs`
+ * anywhere a Node exists, including in a Termux shell on a phone. Same app, same
+ * server functions, same PGLite fallback; only the thing that owns the port
+ * differs. `scripts/build-phone.mjs` sets it; `FLICK_TARGET=vercel` overrides.
+ */
+function deployTarget(): "vercel" | "node-server" {
+  return process.env.FLICK_TARGET?.trim() === "node" ? "node-server" : "vercel";
+}
+
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
@@ -173,7 +187,7 @@ export default defineConfig(({ command, isPreview }) => ({
     ...(command === "build" || isPreview
       ? [
           nitro({
-            preset: "vercel",
+            preset: deployTarget(),
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.

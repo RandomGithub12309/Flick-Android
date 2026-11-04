@@ -1,1 +1,5 @@
 .vercel
+# Self-host build: a phone artifact, not a source tree
+.output/
+.flick-bundle/
+flick-server.tar.gz

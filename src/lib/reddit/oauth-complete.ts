@@ -55,7 +55,7 @@ export async function completeOAuthCode(code: string, state: string): Promise<vo
     };
     store.setSession(session);
     sessionStorage.removeItem("flick.oauth");
-    // Straight into the deck, X lane included: the person has just gone to
+    // Straight into the deck: the person has just gone to
     // some trouble to sign in, and making them press shuffle afterwards would
     // hide whether the mix actually worked.
     await refreshDeck({ reddit: "saved" });

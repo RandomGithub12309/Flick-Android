@@ -1,144 +1,94 @@
 # Flick
 
-A full-screen, swipeable player for **your saved Reddit posts and your X
-bookmarks, mixed into one deck**. Sound on by default, NSFW shown, one video
-player for both hosts.
+A full-screen, swipeable player for **your saved Reddit posts**. Sound on by
+default, NSFW shown, nothing blurred — and it can run with no server but the one
+on your phone.
 
-## How the deck is built
+## What's in the deck
 
-| Lane | Where it comes from | Needs |
-| --- | --- | --- |
-| Reddit | Your saved posts, via OAuth | A Reddit *installed app* ID (you paste it; there's no secret) |
-| Reddit (sample) | A public mix of video subreddits | Nothing |
-| X | Your bookmarks, from a file you export | The export. A Bearer token only if it lists tweets without their media |
+| Feed       | Where it comes from                       | Needs                                                   |
+| ---------- | ----------------------------------------- | ------------------------------------------------------- |
+| Your saves | Reddit's `GET /user/me/saved`, over OAuth | A Reddit _installed app_ ID. There is no secret to keep |
+| Sample mix | A public feed of video subreddits         | Nothing                                                 |
 
-Both lanes are fetched at the same time, and either may fail without stopping the
-other — a dead token or a bad lookup becomes a notice over the feed, not a broken
-app. A tweet is normalised into Flick's own `FlickPost` shape
-(`src/lib/reddit/types.ts`), which is why one player, one seek bar and one skip
-policy serve both hosts.
+Everything Reddit hands back is normalised into one `FlickPost` shape
+(`src/lib/reddit/types.ts`): `v.redd.it` clips with their separate audio track,
+redgifs links (resolved server-side, then proxied so playback doesn't depend on
+a CDN accepting browser headers), galleries, images, and text.
 
-Mixing happens in `src/lib/feed/mix.ts`: each lane is shuffled inside itself, no
-lane is allowed above half the deck (configurable), and the shorter lane is
-spread evenly through the longer one — so a bookmark lands every few slides
-instead of in a block at the end.
+Ordering lives in `src/lib/feed/deck.ts`: one slide per distinct clip — a video
+reposted in three subreddits costs one slide — then a shuffle, so a saved list
+never plays as the week of saves it arrived as.
 
-## Why the X lane reads a file
+## Running it
 
-X serves bookmarks through exactly one door: `GET /2/users/:id/bookmarks`, which
-requires an **OAuth 2.0 user-context token** carrying `bookmark.read`. An
-app-only Bearer token — the kind this app can hold without becoming a login
-provider — is refused outright, and there is no public or embeddable surface for
-bookmarks at all, because they are private. There is also no export button: X's
-own account archive covers your tweets and likes, not what you saved from other
-people.
+Three shapes of the same build. `FLICK_TARGET` picks the one that fits where the
+process will live.
 
-So Flick splits the problem along the line where the privacy actually is:
+| Where it runs            | Command                                         | Output                                            |
+| ------------------------ | ----------------------------------------------- | ------------------------------------------------- |
+| This machine, developing | `npm run dev`                                   | Vite dev server on `0.0.0.0:8080`                 |
+| Vercel                   | `npm run build`                                 | `.vercel/output` — per-function handlers          |
+| **Your phone**           | `npm run build:phone` then `npm run phone:push` | `.output/` — one ~2.4 MB directory, run by `node` |
 
-- **Which tweets** — your export, read in your browser by
-  `src/lib/twitter/bookmarks.ts`. Never uploaded, never stored on a server.
-- **What they are** — tweet *ids* of public posts, resolved through the ordinary
-  tweet-lookup endpoint, which an app-only token *can* read.
+### The phone is the server
 
-That split is also why a JSON export needs no token whatsoever: those rows carry
-their own media, so they parse through the same function an API response does and
-play offline.
+`npm run build:phone` runs the same Vite build with `FLICK_TARGET=node`, so Nitro
+emits `node-server`: a single `.output/` folder holding the SSR renderer, the
+server functions, the client, the service worker and the manifest. It runs with
+`node .output/server/index.mjs` and needs nothing else on disk — no
+`node_modules`, because every dependency was traced into the bundle. That is the
+whole trick: the app is deployed exactly as it would be on Vercel, and the machine
+it is deployed onto is the handset.
 
-## Configuring the X lane
-
-Open **Sources** → *Choose a bookmarks export*. Any of these works:
-
-| Shape | Needs a token? | Notes |
-| --- | --- | --- |
-| JSON / JSONL of tweet objects | No | Best option. Full media, dimensions, counts |
-| CSV with a media column | No | Depends on the exporter writing one |
-| CSV with only id/URL columns | Yes | Each id is looked up |
-| A pasted list of status links | Yes | Ten seconds of work, no export tool |
-
-X has no export for bookmarks, so people use a browser extension that reads the
-bookmarks page while they are signed in. Prefer its **JSON / full tweet** option
-if it has one.
-
-### Why a link is not enough
-
-A row that only says `https://x.com/user/status/1577015903526453248` names a
-tweet; it does not name a file. The clip lives at something like
-`https://video.twimg.com/ext_tw_video/1577015903526453248/pu/vid/1280x720/Dr9kQ2pV.mp4`,
-and that `Dr9kQ2pV` segment is an opaque per-upload hash — not in the status URL,
-not derived from the id, not guessable. The only two ways to obtain it are the
-paid `GET /2/tweets` lookup and **the file itself**, which is why the file is the
-design rather than an convenience.
-
-For one or two clips the free path is manual and takes a minute: open the bookmark
-on x.com, right-click the video, **Copy video address**, and paste both on one
-line in the panel:
+The APK is then a WebView on `http://127.0.0.1:8765`, and `flick` manages the
+process:
 
 ```
-https://x.com/user/status/1577015903526453248 https://video.twimg.com/ext_tw_video/1577015903526453248/pu/vid/1280x720/Dr9kQ2pV.mp4
+flick start | run | status | stop | restart | url | open | logs [n]
 ```
 
-A row like that plays with no token and no API call. A row with only a photo link
-(`pbs.twimg.com/media/….jpg`) works the same way. Rows pasted without media are
-kept too — they just sit in the deck's queue until a lookup resolves them, and
-the panel says how many are in each state rather than letting the deck look
-broken.
+Nothing on the server side needs a volume or a database — the deck is fetched from
+Reddit at load time and the app's own state (session token, mute, age gate) lives
+in the WebView's storage, which persists on its own. So a reboot costs you one
+`flick start`, or nothing at all if you install the Termux:Boot autostart.
 
-A media-only line (the video address with no tweet link) is also accepted: it gets
-a stable key derived from the URL, so re-importing the same file does not
-duplicate the slide. It cannot be badged or looked up, so it is linked to the file
-rather than to an invented tweet id — the importer never guesses an id from
-digits it finds in a path.
+Why a copied build rather than a build on the device: Termux's Node cannot load
+the glibc native addons Vite, Rolldown and Tailwind need, while a Nitro output
+needs no addons at all. Build where the toolchain works, run where the app is.
 
-**Check file** tells you what the deck will actually contain before you press
-shuffle — how many rows parsed, how many play from the file alone, and how many
-the API resolved.
-
-Re-import after you save more. Flick never writes back to X: it cannot bookmark,
-like, or delete anything, and it cannot see a bookmark you removed.
-
-### Deployment-wide token
-
-To let every device resolve ids without pasting a token, set these in the hosting
-environment (e.g. Vercel → Environment Variables):
-
-| Variable | Effect |
-| --- | --- |
-| `X_BEARER_TOKEN` | App-only read token used when the app has none of its own |
-| `X_API_BASE` | Override the API host (default `https://api.x.com`) — for a proxy of your own |
-
-A token pasted in the app wins over the deployment's, so one deploy can serve
-several people. Tokens are stored in the browser (like Reddit's) and are sent only
-to Flick's own server functions, which call X with them.
-
-Tweet lookup is a paid endpoint. A plan without read access resolves nothing — the
-`missing` count and the notice say so rather than showing an empty deck.
+Full walk-through, including the APK and what to do when it doesn't come up:
+[NATIVE_ANDROID.md](NATIVE_ANDROID.md).
 
 ## Commands
 
 ```
-npm run dev         # http://0.0.0.0:8080
-npm run build       # production build
+npm run dev           # http://0.0.0.0:8080
+npm run build         # production build for Vercel
+npm run build:phone   # the self-runnable .output/ directory
+npm run phone         # start what you just built, on this machine
+npm run phone:push    # pack .output/ and print the phone-side one-liner
+npm run phone:status  # is it up?  (also :logs :stop :run)
+npm test              # node --test over src/lib and scripts
 npm run typecheck
-npm test            # node --test over src/lib (importer, parsers, mixer, request policy)
+npm run lint
 npm run android:sync
 ```
-
-Building the APK — including why the WebView must point at a **production**
-deployment URL — is covered in [NATIVE_ANDROID.md](NATIVE_ANDROID.md).
 
 ## Layout
 
 - `src/lib/reddit/` — OAuth, saved-post paging, redgifs resolution, listing parser
-- `src/lib/twitter/` — bookmarks importer (`bookmarks.ts`), X→`FlickPost` parser, id lookup (`x.server.ts`)
-- `src/lib/feed/` — the mixer and the loader that runs both lanes
+- `src/lib/feed/` — deck rules (`deck.ts`), the fetch that fills it (`load.ts`)
 - `src/components/` — `feed` (swipe, keys, skip policy), `post-slide`, `video-player`, `seek-bar`
 - `src/store/flick.ts` — screens, the deck, per-device settings
+- `scripts/phone-server.mjs` — the launcher: port, process, honest status
+- `scripts/phone-install.sh` — the on-device half of the same story
+- `vite.config.ts` — `FLICK_TARGET` decides Vercel output or a self-runnable server
 
 ## Privacy notes
 
-The bookmark list is the most personal thing in this app, so it is also the thing
-that stays home: the file is read in the browser, only tweet *ids* are sent to the
-lookup, and the import lives in this device's storage (`flick.v1`) — signing out of
-Reddit keeps it, and clearing site data removes it. Nothing in `src/` writes the
-import to a server, and `X_API_BASE` exists so a deployment can route lookups
-through its own proxy rather than X directly.
+The Reddit access token and every setting this app has live in the device's own
+storage (`flick.v1`), not on a Flick server — and when you self-host there usually
+isn't one. Flick reads your saves and nothing else: it never writes back, so it
+cannot unsave, upvote, or mark anything seen. Redgifs playback is proxied through
+whatever server the app is talking to, which on a phone is the phone.

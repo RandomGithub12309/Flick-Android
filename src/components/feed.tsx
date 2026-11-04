@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActionRail } from "@/components/action-rail";
 import { PostSlide } from "@/components/post-slide";
-import { originOf } from "@/lib/feed/mix";
 import { useFlick } from "@/store/flick";
 
 const THRESHOLD = 72;
@@ -12,31 +11,14 @@ const THRESHOLD = 72;
  */
 const MAX_CONSECUTIVE_SKIPS = 8;
 const SKIP_SETTLE_MS = 400;
-/** How long a lane's "X was skipped" note stays up before it gets out of the way. */
+/** How long a notice stays up before it gets out of the way. */
 const NOTICE_MS = 9000;
-
-/**
- * What the deck is made of, in the corner where the user can check it before
- * blaming the player for a missing lane. Derived from the posts themselves
- * rather than from the settings, so it describes what is on screen.
- */
-function deckLabel(source: string, origins: string[], bookmarks: number): string {
-  // No handle to name here: a bookmarks import is the person's own list, and the
-  // count is the only thing that identifies it without leaking what is in it.
-  const x = bookmarks > 0 ? `X · ${bookmarks.toLocaleString()}` : "X";
-  const reddit = source === "saved" ? "Saved" : "Shuffle";
-  if (!origins.includes("reddit")) return x;
-  if (!origins.includes("twitter")) return reddit;
-  return `${reddit} + ${x}`;
-}
 
 export function Feed() {
   const posts = useFlick((s) => s.posts);
   const index = useFlick((s) => s.index);
   const muted = useFlick((s) => s.muted);
   const source = useFlick((s) => s.source);
-  const feedOrigins = useFlick((s) => s.feedOrigins);
-  const twitter = useFlick((s) => s.twitter);
   const notice = useFlick((s) => s.notice);
   const setNotice = useFlick((s) => s.setNotice);
   const next = useFlick((s) => s.next);
@@ -239,7 +221,7 @@ export function Feed() {
           <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-4 pt-safe">
             <div className="pointer-events-auto pt-3">
               <p className="text-xs font-medium uppercase tracking-widest text-fg/80">
-                {deckLabel(source, feedOrigins, twitter?.bookmarks?.entries.length ?? 0)}
+                {source === "saved" ? "Your saved posts" : "The Reddit mix"}
               </p>
               <p className="tabular-nums text-sm text-muted">
                 {index + 1} / {posts.length}
@@ -286,7 +268,6 @@ export function Feed() {
           <ActionRail
             muted={muted}
             permalink={post.permalink}
-            sourceLabel={originOf(post) === "twitter" ? "X" : "Reddit"}
             onShuffle={reroll}
             onToggleMute={toggleMuted}
             onSignOut={source === "saved" ? signOut : undefined}

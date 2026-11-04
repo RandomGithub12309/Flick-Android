@@ -1,21 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { shrinkImport } from "@/lib/twitter/bookmarks";
-import { orderDeck } from "@/lib/feed/mix";
-import type { FlickOrigin, FlickPost, RedditSession } from "@/lib/reddit/types";
-import type { BookmarkImport, TwitterSource } from "@/lib/twitter/types";
-
-/** What one imported bookmarks file may occupy in device storage. */
-const IMPORT_BYTE_BUDGET = 1_200_000;
+import { orderDeck } from "@/lib/feed/deck";
+import { purgeRemovedLanes } from "@/lib/feed/storage-migration";
+import type { FlickPost, RedditSession } from "@/lib/reddit/types";
 
 export type Screen = "home" | "connect" | "loading" | "feed";
-/**
- * Which Reddit feed produced the deck, or `"twitter"` when X was the only lane
- * that answered. Whether the deck is a mix is not encoded here: it is read off
- * the posts (`feedOrigins`), because that is the one thing that cannot disagree
- * with what is actually on screen.
- */
-export type FeedSource = "saved" | "demo" | "twitter";
+/** Which Reddit feed produced the deck. */
+export type FeedSource = "saved" | "demo";
 
 type FlickState = {
   ageOk: boolean;
@@ -33,33 +24,16 @@ type FlickState = {
    * Reddit would accept.
    */
   redditRedirectUri: string;
-  /**
-   * The X lane: a lookup token and the imported bookmarks file, or null when
-   * only Reddit is pulled. There is no handle here — an import is the source,
-   * and each slide is badged by the author on the tweet itself.
-   */
-  twitter: TwitterSource | null;
-  /** Off means the import stays on file but sits out the next shuffle. */
-  includeTwitter: boolean;
-  /** Off means the deck is the X bookmarks alone — no Reddit lane is fetched. */
-  includeReddit: boolean;
-  /**
-   * Ceiling on how much of the deck X may take, handed to the mixer.
-   * 0.5 (the default) keeps neither host above half; 1 keeps every post of
-   * both and lets the spread alone decide the rhythm.
-   */
-  twitterShare: number;
   posts: FlickPost[];
-  /** Hosts present in `posts`, for the header and the slide badge. */
-  feedOrigins: FlickOrigin[];
   index: number;
   muted: boolean;
   loadingLabel: string;
   loadingCount: number;
   error: string | null;
   /**
-   * A lane that half-worked: shown over the feed instead of blocking it, since
-   * a shuffle that is missing its X lane is still a shuffle worth watching.
+   * Something worth the person's attention that does not stop the deck — an
+   * expired session falling back to the public mix, say. Shown over the feed
+   * rather than as an error screen, because the deck still plays.
    */
   notice: string | null;
   acceptAge: () => void;
@@ -70,12 +44,6 @@ type FlickState = {
   setLoading: (label: string, count?: number) => void;
   setPosts: (posts: FlickPost[], source: FeedSource) => void;
   setRedditRedirectUri: (uri: string) => void;
-  setTwitterToken: (token: string) => void;
-  /** Replace (or clear, with null) the imported bookmarks file. */
-  setBookmarks: (imported: BookmarkImport | null) => void;
-  setIncludeTwitter: (value: boolean) => void;
-  setIncludeReddit: (value: boolean) => void;
-  setTwitterShare: (value: number) => void;
   setIndex: (index: number) => void;
   next: () => void;
   prev: () => void;
@@ -92,12 +60,7 @@ export const useFlick = create<FlickState>()(
       screen: "home",
       source: "demo",
       session: null,
-      twitter: null,
-      includeTwitter: true,
-      includeReddit: true,
-      twitterShare: 0.5,
       posts: [],
-      feedOrigins: [],
       index: 0,
       muted: false,
       loadingLabel: "",
@@ -112,19 +75,17 @@ export const useFlick = create<FlickState>()(
       setLoading: (label, count = 0) =>
         set({ screen: "loading", loadingLabel: label, loadingCount: count, error: null }),
       setPosts: (posts, source) => {
-        // Ordering is the store's job, not the loader's: whatever mix of hosts a
-        // caller hands over comes out spread, and a single-host deck stays the
-        // plain shuffle it always was.
-        const deck = orderDeck(posts, { maxShare: get().twitterShare });
+        // Ordering is the store's job, not the loader's: whatever a caller hands
+        // over comes out as a deck, so no fetch path can forget the rules.
+        const deck = orderDeck(posts);
         set({
           posts: deck,
-          feedOrigins: deck.length > 0 ? originSet(deck) : [],
           source,
           index: 0,
           screen: deck.length > 0 ? "feed" : "home",
           error:
             deck.length === 0
-              ? "Nothing to play. Save a video on Reddit, or import an X bookmarks file that has media in it."
+              ? "Nothing to play. Save a video on Reddit, or shuffle the public mix."
               : null,
         });
       },
@@ -145,33 +106,6 @@ export const useFlick = create<FlickState>()(
         set({ index: (index - 1 + posts.length) % posts.length });
       },
       setRedditRedirectUri: (uri) => set({ redditRedirectUri: uri.trim() }),
-      setTwitterToken: (token) =>
-        set({
-          twitter: { bookmarks: get().twitter?.bookmarks ?? null, bearerToken: token.trim() },
-        }),
-      setBookmarks: (imported) => {
-        // The import is persisted, and it is the one piece of user data here
-        // with no size limit of its own: a 40k-row JSON dump serialises to
-        // several megabytes, and localStorage fails that write silently on
-        // Android WebView — the deck works now and is gone on the next load,
-        // which is worse than a trimmed file that says it was trimmed.
-        const twitter = get().twitter;
-        if (!imported) {
-          set({ twitter: { bearerToken: twitter?.bearerToken ?? "", bookmarks: null } });
-          return;
-        }
-        const { import: stored, shrunk } = shrinkImport(imported, IMPORT_BYTE_BUDGET);
-        set({
-          twitter: {
-            bearerToken: twitter?.bearerToken ?? "",
-            bookmarks: { ...stored, shrunk },
-          },
-        });
-      },
-      setIncludeTwitter: (value) => set({ includeTwitter: value }),
-      setIncludeReddit: (value) => set({ includeReddit: value }),
-      setTwitterShare: (value) =>
-        set({ twitterShare: Math.min(1, Math.max(0.1, Number.isFinite(value) ? value : 0.5)) }),
       reroll: () => {
         const { posts, index } = get();
         if (posts.length < 2) return;
@@ -182,12 +116,8 @@ export const useFlick = create<FlickState>()(
       toggleMuted: () => set({ muted: !get().muted }),
       signOut: () =>
         set({
-          // The X lane is independent of the Reddit session and survives signing
-          // out — an import is a file on this device, and losing it would mean
-          // re-finding the export to watch the same deck again.
           session: null,
           posts: [],
-          feedOrigins: [],
           index: 0,
           screen: "home",
           source: "demo",
@@ -197,22 +127,16 @@ export const useFlick = create<FlickState>()(
     }),
     {
       name: "flick.v1",
+      // v2: the X lane is gone, and its import was the one persisted value with
+      // no reader left behind it. See `@/lib/feed/storage-migration`.
+      version: 2,
+      migrate: (persisted) => purgeRemovedLanes(persisted),
       partialize: (state) => ({
         ageOk: state.ageOk,
         session: state.session,
         muted: state.muted,
         redditRedirectUri: state.redditRedirectUri,
-        twitter: state.twitter,
-        includeTwitter: state.includeTwitter,
-        includeReddit: state.includeReddit,
-        twitterShare: state.twitterShare,
       }),
     },
   ),
 );
-
-function originSet(posts: FlickPost[]): FlickOrigin[] {
-  const found = new Set<FlickOrigin>();
-  for (const post of posts) found.add(post.origin ?? "reddit");
-  return [...found];
-}
