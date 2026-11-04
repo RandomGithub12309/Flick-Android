@@ -4,9 +4,10 @@ import { twitterStatus } from "./functions";
 /**
  * Whether the deployment carries `X_BEARER_TOKEN`.
  *
- * The form needs to know, or it would ask for a token that is already there and
- * never explain why a handle alone works. Kept out of the component file so
- * that one stays components-only (Fast Refresh).
+ * The form needs to know, or it would ask for a token that is already there —
+ * and, more importantly, it could not promise that an export of bare ids will
+ * resolve for someone who has no key of their own. Kept out of the component
+ * file so that one stays components-only (Fast Refresh).
  */
 export function useServerToken(): boolean {
   const [configured, setConfigured] = useState<boolean | null>(null);

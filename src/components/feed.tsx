@@ -20,8 +20,10 @@ const NOTICE_MS = 9000;
  * blaming the player for a missing lane. Derived from the posts themselves
  * rather than from the settings, so it describes what is on screen.
  */
-function deckLabel(source: string, origins: string[], handle: string): string {
-  const x = handle ? `@${handle}` : "X";
+function deckLabel(source: string, origins: string[], bookmarks: number): string {
+  // No handle to name here: a bookmarks import is the person's own list, and the
+  // count is the only thing that identifies it without leaking what is in it.
+  const x = bookmarks > 0 ? `X · ${bookmarks.toLocaleString()}` : "X";
   const reddit = source === "saved" ? "Saved" : "Shuffle";
   if (!origins.includes("reddit")) return x;
   if (!origins.includes("twitter")) return reddit;
@@ -237,7 +239,7 @@ export function Feed() {
           <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-4 pt-safe">
             <div className="pointer-events-auto pt-3">
               <p className="text-xs font-medium uppercase tracking-widest text-fg/80">
-                {deckLabel(source, feedOrigins, twitter?.handle ?? "")}
+                {deckLabel(source, feedOrigins, twitter?.bookmarks?.entries.length ?? 0)}
               </p>
               <p className="tabular-nums text-sm text-muted">
                 {index + 1} / {posts.length}

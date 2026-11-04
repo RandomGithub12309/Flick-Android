@@ -1,9 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { normalizeHandle } from "@/lib/twitter/parse";
+import { shrinkImport } from "@/lib/twitter/bookmarks";
 import { orderDeck } from "@/lib/feed/mix";
 import type { FlickOrigin, FlickPost, RedditSession } from "@/lib/reddit/types";
-import type { TwitterAccount } from "@/lib/twitter/types";
+import type { BookmarkImport, TwitterSource } from "@/lib/twitter/types";
+
+/** What one imported bookmarks file may occupy in device storage. */
+const IMPORT_BYTE_BUDGET = 1_200_000;
 
 export type Screen = "home" | "connect" | "loading" | "feed";
 /**
@@ -30,11 +33,15 @@ type FlickState = {
    * Reddit would accept.
    */
   redditRedirectUri: string;
-  /** The X account mixed into the deck, or null when only Reddit is pulled. */
-  twitter: TwitterAccount | null;
-  /** Off means the X account stays configured but sits out the next shuffle. */
+  /**
+   * The X lane: a lookup token and the imported bookmarks file, or null when
+   * only Reddit is pulled. There is no handle here — an import is the source,
+   * and each slide is badged by the author on the tweet itself.
+   */
+  twitter: TwitterSource | null;
+  /** Off means the import stays on file but sits out the next shuffle. */
   includeTwitter: boolean;
-  /** Off means the deck is the X account alone — no Reddit lane is fetched. */
+  /** Off means the deck is the X bookmarks alone — no Reddit lane is fetched. */
   includeReddit: boolean;
   /**
    * Ceiling on how much of the deck X may take, handed to the mixer.
@@ -63,9 +70,9 @@ type FlickState = {
   setLoading: (label: string, count?: number) => void;
   setPosts: (posts: FlickPost[], source: FeedSource) => void;
   setRedditRedirectUri: (uri: string) => void;
-  setTwitter: (account: TwitterAccount | null) => void;
-  /** X's own spelling of the handle, once a fetch has resolved it. */
-  setTwitterHandle: (handle: string) => void;
+  setTwitterToken: (token: string) => void;
+  /** Replace (or clear, with null) the imported bookmarks file. */
+  setBookmarks: (imported: BookmarkImport | null) => void;
   setIncludeTwitter: (value: boolean) => void;
   setIncludeReddit: (value: boolean) => void;
   setTwitterShare: (value: number) => void;
@@ -117,7 +124,7 @@ export const useFlick = create<FlickState>()(
           screen: deck.length > 0 ? "feed" : "home",
           error:
             deck.length === 0
-              ? "Nothing to play. Save a video on Reddit, or point Flick at an X account that posts them."
+              ? "Nothing to play. Save a video on Reddit, or import an X bookmarks file that has media in it."
               : null,
         });
       },
@@ -138,17 +145,28 @@ export const useFlick = create<FlickState>()(
         set({ index: (index - 1 + posts.length) % posts.length });
       },
       setRedditRedirectUri: (uri) => set({ redditRedirectUri: uri.trim() }),
-      setTwitter: (account) =>
+      setTwitterToken: (token) =>
         set({
-          twitter: account
-            ? { handle: normalizeHandle(account.handle), bearerToken: account.bearerToken.trim() }
-            : null,
+          twitter: { bookmarks: get().twitter?.bookmarks ?? null, bearerToken: token.trim() },
         }),
-      setTwitterHandle: (handle) => {
-        const { twitter } = get();
-        const normalized = normalizeHandle(handle);
-        if (!twitter || !normalized || twitter.handle === normalized) return;
-        set({ twitter: { ...twitter, handle: normalized } });
+      setBookmarks: (imported) => {
+        // The import is persisted, and it is the one piece of user data here
+        // with no size limit of its own: a 40k-row JSON dump serialises to
+        // several megabytes, and localStorage fails that write silently on
+        // Android WebView — the deck works now and is gone on the next load,
+        // which is worse than a trimmed file that says it was trimmed.
+        const twitter = get().twitter;
+        if (!imported) {
+          set({ twitter: { bearerToken: twitter?.bearerToken ?? "", bookmarks: null } });
+          return;
+        }
+        const { import: stored, shrunk } = shrinkImport(imported, IMPORT_BYTE_BUDGET);
+        set({
+          twitter: {
+            bearerToken: twitter?.bearerToken ?? "",
+            bookmarks: { ...stored, shrunk },
+          },
+        });
       },
       setIncludeTwitter: (value) => set({ includeTwitter: value }),
       setIncludeReddit: (value) => set({ includeReddit: value }),
@@ -164,9 +182,9 @@ export const useFlick = create<FlickState>()(
       toggleMuted: () => set({ muted: !get().muted }),
       signOut: () =>
         set({
-          // The X account is independent of the Reddit session and survives
-          // signing out — it costs nothing to keep, and losing it would mean
-          // retyping a token to watch the same deck again.
+          // The X lane is independent of the Reddit session and survives signing
+          // out — an import is a file on this device, and losing it would mean
+          // re-finding the export to watch the same deck again.
           session: null,
           posts: [],
           feedOrigins: [],

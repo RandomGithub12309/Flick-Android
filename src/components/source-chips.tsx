@@ -1,5 +1,4 @@
 import { ArrowRight, Settings2 } from "lucide-react";
-import { isHandle } from "@/lib/twitter/parse";
 import { useFlick } from "@/store/flick";
 import { cn } from "@/lib/utils";
 
@@ -17,8 +16,14 @@ export function SourceChips() {
   const includeReddit = useFlick((s) => s.includeReddit);
   const setScreen = useFlick((s) => s.setScreen);
 
-  const handle = twitter?.handle ?? "";
-  const twitterOn = includeTwitter && isHandle(handle);
+  const bookmarks = twitter?.bookmarks?.entries.length ?? 0;
+  // Three states, because "off" and "nothing to read yet" send the person to
+  // different fixes: one is a toggle, the other is a file.
+  const twitterLabel = !includeTwitter
+    ? "X off"
+    : bookmarks > 0
+      ? `X · ${bookmarks.toLocaleString()} bookmarks`
+      : "X · add a bookmarks file";
   const redditLabel = session ? `Reddit · u/${session.username}` : "Reddit · sample mix";
 
   return (
@@ -31,7 +36,7 @@ export function SourceChips() {
       <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
         <Chip on={includeReddit}>{includeReddit ? redditLabel : "Reddit off"}</Chip>
         <span className="text-xs text-subtle">+</span>
-        <Chip on={twitterOn}>{twitterOn ? `X · @${handle}` : "X off"}</Chip>
+        <Chip on={includeTwitter && bookmarks > 0}>{twitterLabel}</Chip>
       </span>
       <ArrowRight className="size-4 shrink-0 text-subtle" />
     </button>
