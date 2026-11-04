@@ -67,6 +67,51 @@ export function extractTweetId(value: unknown): string | null {
   return DIGITS.exec(unwrapped)?.[1] ?? null;
 }
 
+/**
+ * A stable key for a row that names a media file but no tweet.
+ *
+ * FNV-1a over the URL, base36. Not a tweet id and never passed as one — it only
+ * has to be the same string next time the same file is imported, so a re-import
+ * updates slides instead of duplicating them. That is the whole reason this is
+ * allowed where "guess an id from the row number" is not.
+ */
+function fileKey(url: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < url.length; i++) {
+    hash ^= url.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `file_${hash.toString(36)}`;
+}
+
+const ANY_URL = /https?:\/\/[^\s"',;]+/gi;
+const FILE_LOOKS_LIKE_MEDIA = /\.(mp4|m4v|mov|webm|jpe?g|png|webp|gif|avif)(\?|$)/i;
+
+/**
+ * Split a pasted line into "the tweet link" and "the media link".
+ *
+ * This is what makes a token-free import possible: the tweet URL alone is not
+ * playable (its video path contains an opaque per-upload hash that nothing can
+ * derive), but the address copied from the player *is*, and both fit on one
+ * line separated by a space or a comma.
+ */
+function splitLine(line: string): { tweetUrl?: string; media: string[] } {
+  const urls = line.match(ANY_URL) ?? [];
+  const media: string[] = [];
+  let tweetUrl: string | undefined;
+  for (const url of urls) {
+    if (!tweetUrl && STATUS_URL.test(url)) {
+      tweetUrl = url;
+      continue;
+    }
+    // Photos count: a slide is a slide, and `postFromEntry` prefers the video
+    // when a row carries both. Filtering images here would contradict the CSV
+    // reader, which keeps them.
+    if (FILE_LOOKS_LIKE_MEDIA.test(url) || /twimg\.com/i.test(url)) media.push(url);
+  }
+  return { tweetUrl, media };
+}
+
 /** `x.com/nasa/status/123` → `nasa`, so a URL-only export still gets a badge. */
 function handleFromStatusUrl(value: string): string | undefined {
   const match = value.match(HANDLE_IN_URL);
@@ -87,6 +132,33 @@ function protectBigIntIds(text: string): string {
     /([{,]\s*"[A-Za-z0-9_]+"|"[A-Za-z0-9_]+")\s*:\s*(\d{16,})(\s*[,\]}])/g,
     '$1:"$2"$3',
   );
+}
+
+/**
+ * Append an entry, keeping one entry per tweet.
+ *
+ * The same tweet shows up twice in real exports constantly — a bookmark listed
+ * in both the "all" and a folder view, a thread posted twice — and the count on
+ * the panel is meant to be "how many slides this can make", so double-counting
+ * would be a small lie with a visible cost. When the two rows differ, the richer
+ * one wins: an exporter that writes a bare id first and the full object later
+ * must not lose the media, since that is the difference between a slide and a
+ * lookup.
+ */
+function addEntry(
+  entries: BookmarkEntry[],
+  indexById: Map<string, number>,
+  entry: BookmarkEntry,
+): void {
+  const at = indexById.get(entry.id);
+  if (at === undefined) {
+    indexById.set(entry.id, entries.length);
+    entries.push(entry);
+    return;
+  }
+  const existing = entries[at] as BookmarkEntry;
+  const richness = (e: BookmarkEntry) => (e.raw ? 2 : 0) + (e.mediaUrls?.length ? 1 : 0);
+  if (richness(entry) > richness(existing)) entries[at] = entry;
 }
 
 /** Split on the delimiter the file actually uses, judged from its header line. */
@@ -262,6 +334,7 @@ function entriesFromCsv(text: string): { entries: BookmarkEntry[]; rejected: num
     return { entries: [], rejected: Math.max(0, rows.length - 1) };
   }
   const entries: BookmarkEntry[] = [];
+  const indexById = new Map<string, number>();
   let rejected = 0;
   for (const row of rows.slice(1)) {
     const cell = (key: ColumnKey): string | undefined => {
@@ -288,7 +361,7 @@ function entriesFromCsv(text: string): { entries: BookmarkEntry[]; rejected: num
     if (at) entry.createdAt = at;
     const media = mediaFromCell(cell("media"));
     if (media.length > 0) entry.mediaUrls = media;
-    entries.push(entry);
+    addEntry(entries, indexById, entry);
     if (entries.length >= MAX_ENTRIES) break;
   }
   return { entries, rejected };
@@ -395,6 +468,7 @@ function entriesFromJson(text: string): {
     }
   }
   const entries: BookmarkEntry[] = [];
+  const indexById = new Map<string, number>();
   let rejected = 0;
   for (const row of rows) {
     // A JSON array of ids and status URLs is a thing people hand-write.
@@ -418,7 +492,7 @@ function entriesFromJson(text: string): {
       rejected += 1;
       continue;
     }
-    entries.push(entry);
+    addEntry(entries, indexById, entry);
     if (entries.length >= MAX_ENTRIES) break;
   }
   return { entries, rejected, format };
@@ -426,22 +500,35 @@ function entriesFromJson(text: string): {
 
 function entriesFromLines(text: string): { entries: BookmarkEntry[]; rejected: number } {
   const entries: BookmarkEntry[] = [];
+  const indexById = new Map<string, number>();
   let rejected = 0;
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || /^\/\//.test(trimmed)) continue;
-    const id = extractTweetId(trimmed);
-    if (!id) {
+    const { tweetUrl, media } = splitLine(trimmed);
+    // The digits-only fallback applies to a line that is a bare id, never to a
+    // URL: twimg video paths embed the tweet id (`ext_tw_video/<id>/pu/vid/…`),
+    // so reading one out of the path would *look* right on the common case and
+    // be wrong on everything else — a `pbs.twimg.com/media/…` photo has no id
+    // there at all, and a `?tag=12` would do just as well. Guessing an id is how
+    // a deck ends up playing the wrong clip.
+    const fromUrl = tweetUrl ? extractTweetId(tweetUrl) : null;
+    const fromBare = /^https?:\/\//i.test(trimmed) ? null : extractTweetId(trimmed);
+    const id = fromUrl ?? fromBare;
+    let entry: BookmarkEntry | null = null;
+    if (id) entry = { id };
+    else if (media[0]) entry = { id: fileKey(media[0]), synthetic: true };
+    if (!entry) {
       rejected += 1;
       continue;
     }
-    const entry: BookmarkEntry = { id };
-    if (/^https?:\/\//i.test(trimmed)) {
-      entry.url = trimmed;
-      const handle = handleFromStatusUrl(trimmed);
+    if (tweetUrl) {
+      entry.url = tweetUrl;
+      const handle = handleFromStatusUrl(tweetUrl);
       if (handle) entry.account = handle;
     }
-    entries.push(entry);
+    if (media.length > 0) entry.mediaUrls = media;
+    addEntry(entries, indexById, entry);
     if (entries.length >= MAX_ENTRIES) break;
   }
   return { entries, rejected };
@@ -583,7 +670,11 @@ export function postFromEntry(entry: BookmarkEntry): FlickPost | null {
   // brought in on its own.
   if (isUnsafeMinorContent(title, entry.account)) return null;
 
-  const permalink = entry.url ?? `https://x.com/i/status/${entry.id}`;
+  // A media-only row has no tweet page to point at, and inventing one would
+  // send the "open" button to a 404 on x.com. The file is the source here.
+  const permalink =
+    entry.url ??
+    (entry.synthetic ? (entry.mediaUrls?.[0] ?? "") : `https://x.com/i/status/${entry.id}`);
   const base = {
     id: `x_${entry.id}`,
     name: entry.account ? `x:${entry.account}` : `x:${entry.id}`,
