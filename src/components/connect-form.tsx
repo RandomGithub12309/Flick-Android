@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Browser } from "@capacitor/browser";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ import {
   logoutTwitterNative,
 } from "@/lib/twitter/native-auth";
 import { parseTwitterCookies } from "@/lib/twitter/parse";
+import { fetchTwitterBookmarksPage } from "@/lib/twitter/twitter.native";
 import { DEFAULT_SUBREDDITS, useFlick } from "@/store/flick";
 
 function redirectUri(): string {
@@ -142,7 +144,20 @@ export function ConnectForm() {
     }
   }
 
-  function saveManualTwitter(e: React.FormEvent) {
+  async function openExternalX() {
+    setShowManualX(true);
+    setError(null);
+    const url = "https://x.com/home";
+    if (isNative()) {
+      await Browser.open({ url }).catch(() => {
+        window.open(url, "_blank");
+      });
+    } else {
+      window.open(url, "_blank");
+    }
+  }
+
+  async function saveManualTwitter(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     const parsed = parseTwitterCookies(xAuthInput, xCt0Input);
@@ -150,13 +165,23 @@ export function ConnectForm() {
       setError("Enter both auth_token and ct0 (or paste a Cookie header containing both).");
       return;
     }
-    setTwitterSession({
+    const candidate = {
       authToken: parsed.authToken,
       ct0: parsed.ct0,
       username: xHandleInput.replace(/^@/, "").trim() || "x",
-    });
-    setXAuthInput("");
-    setXCt0Input("");
+    };
+    setTwitterBusy(true);
+    try {
+      await fetchTwitterBookmarksPage(candidate, null, 1);
+      setTwitterSession(candidate);
+      setXAuthInput("");
+      setXCt0Input("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not verify X cookies.";
+      setError(msg);
+    } finally {
+      setTwitterBusy(false);
+    }
   }
 
   return (
@@ -272,21 +297,35 @@ export function ConnectForm() {
         <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-muted">
           X (Twitter) bookmarks
         </h2>
-        {isNativeTwitterAuthSupported() ? (
+        <div className="flex flex-col gap-2">
           <Button
             type="button"
             size="lg"
+            variant={isNativeTwitterAuthSupported() ? "secondary" : "primary"}
             className="w-full"
             disabled={twitterBusy}
-            onClick={() => void connectTwitterWebView()}
+            onClick={() => void openExternalX()}
           >
-            {twitterBusy
-              ? "Waiting for X sign-in…"
-              : twitterSession
-                ? "Reconnect X in WebView"
-                : "Sign in with X"}
+            <ExternalLink className="mr-2 size-4" />
+            Sign in via external browser
           </Button>
-        ) : null}
+          {isNativeTwitterAuthSupported() ? (
+            <Button
+              type="button"
+              size="md"
+              variant="ghost"
+              className="w-full"
+              disabled={twitterBusy}
+              onClick={() => void connectTwitterWebView()}
+            >
+              {twitterBusy
+                ? "Waiting for X sign-in…"
+                : twitterSession
+                  ? "Reconnect X in WebView (in-app)"
+                  : "Sign in with X (in-app WebView)"}
+            </Button>
+          ) : null}
+        </div>
         <button
           type="button"
           className="self-start text-left text-xs text-muted underline-offset-4 hover:underline"
@@ -296,6 +335,21 @@ export function ConnectForm() {
         </button>
         {showManualX ? (
           <form className="flex flex-col gap-3" onSubmit={saveManualTwitter}>
+            <ol className="list-decimal space-y-1.5 rounded-lg bg-surface-1/60 p-3 pl-7 text-xs leading-normal text-muted">
+              <li>
+                Sign in to <span className="text-fg">x.com</span> in your external browser (avoids
+                in-app WebView verification checks).
+              </li>
+              <li>
+                Because X marks <code className="text-fg">auth_token</code> as{" "}
+                <code className="text-fg">HttpOnly</code>, copy{" "}
+                <code className="text-fg">auth_token</code> and{" "}
+                <code className="text-fg">ct0</code> from a cookie manager extension (e.g.
+                Cookie-Editor) or desktop DevTools → Application → Cookies →{" "}
+                <span className="text-fg">https://x.com</span>.
+              </li>
+              <li>Paste both values (or a full Cookie header) below to verify and connect.</li>
+            </ol>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="x-auth">auth_token (or full Cookie header)</Label>
               <Input
@@ -329,8 +383,15 @@ export function ConnectForm() {
                 placeholder="username"
               />
             </div>
-            <Button type="submit" size="md" variant="secondary" className="w-full">
-              Save X session
+            {error ? <p className="text-sm text-danger">{error}</p> : null}
+            <Button
+              type="submit"
+              size="md"
+              variant="secondary"
+              className="w-full"
+              disabled={twitterBusy}
+            >
+              {twitterBusy ? "Verifying…" : "Save & verify X session"}
             </Button>
           </form>
         ) : null}

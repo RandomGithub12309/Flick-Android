@@ -39,7 +39,24 @@ export function registerNativeOauthListener(): () => void {
     } catch {
       return;
     }
-    if (`${parsed.protocol}//${parsed.host}` !== "flick://oauth") return;
+    const host = `${parsed.protocol}//${parsed.host}`;
+    if (host === "flick://x-auth") {
+      const authToken = parsed.searchParams.get("auth_token")?.trim() ?? "";
+      const ct0 = parsed.searchParams.get("ct0")?.trim() ?? "";
+      const screenName = parsed.searchParams.get("screen_name")?.replace(/^@/, "").trim() || "x";
+      const store = useFlick.getState();
+      if (!authToken || !ct0) {
+        store.setError("Missing auth_token or ct0 in X callback.");
+        store.setScreen("connect");
+        return;
+      }
+      store.setTwitterSession({ authToken, ct0, username: screenName });
+      store.setError(null);
+      store.setScreen("connect");
+      return;
+    }
+
+    if (host !== "flick://oauth") return;
 
     const error = parsed.searchParams.get("error");
     const code = parsed.searchParams.get("code");
