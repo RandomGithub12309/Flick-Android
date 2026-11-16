@@ -37,6 +37,7 @@ function buildHeaders(session: TwitterSession, isPost = false): Record<string, s
     "x-twitter-active-user": "yes",
     "x-twitter-client-language": "en",
     "User-Agent": X_WEB_UA,
+    Origin: "https://x.com",
     Referer: "https://x.com/i/bookmarks",
   };
   if (isPost) {
@@ -102,6 +103,11 @@ async function gqlRequest(
     }
     if (wv.status === 401) {
       throw new Error("X session expired — sign in to X again.");
+    }
+    if (wv.status === 403) {
+      throw new Error(
+        "X rejected the request (403) — make sure both auth_token and ct0 are current and from the same signed-in x.com session.",
+      );
     }
     throw new Error(`X request failed (${wv.status || res.status}).`);
   }

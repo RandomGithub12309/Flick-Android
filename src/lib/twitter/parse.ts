@@ -26,12 +26,14 @@ export function parseTwitterCookies(
   authTokenOrCookie: string,
   ct0Input?: string,
 ): { authToken: string; ct0: string } | null {
-  const trimmed = authTokenOrCookie.trim();
+  const trimmed = authTokenOrCookie.trim().replace(/^cookie:\s*/i, "");
   if (!trimmed) return null;
 
+  const unquote = (v: string) => v.trim().replace(/^["']|["']$/g, "");
+
   if (ct0Input && ct0Input.trim()) {
-    const authToken = trimmed.replace(/^auth_token=/i, "").trim();
-    const ct0 = ct0Input.trim().replace(/^ct0=/i, "").trim();
+    const authToken = unquote(trimmed.replace(/^auth_token=/i, ""));
+    const ct0 = unquote(ct0Input.trim().replace(/^ct0=/i, ""));
     if (authToken && ct0) return { authToken, ct0 };
   }
 
@@ -40,8 +42,8 @@ export function parseTwitterCookies(
   for (const part of trimmed.split(";")) {
     const eq = part.indexOf("=");
     if (eq === -1) continue;
-    const k = part.slice(0, eq).trim();
-    const v = part.slice(eq + 1).trim();
+    const k = part.slice(0, eq).trim().toLowerCase();
+    const v = unquote(part.slice(eq + 1));
     if (k === "auth_token") authToken = v;
     if (k === "ct0") ct0 = v;
   }

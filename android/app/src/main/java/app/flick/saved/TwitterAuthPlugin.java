@@ -199,6 +199,19 @@ public class TwitterAuthPlugin extends Plugin {
         }
 
         getActivity().runOnUiThread(() -> {
+            if (headersObj != null) {
+                Iterator<String> cookieKeys = headersObj.keys();
+                while (cookieKeys.hasNext()) {
+                    String k = cookieKeys.next();
+                    if ("cookie".equalsIgnoreCase(k)) {
+                        String cookieVal = headersObj.optString(k, "");
+                        if (cookieVal != null && !cookieVal.isEmpty()) {
+                            syncCookiesToWebView(cookieVal);
+                        }
+                        break;
+                    }
+                }
+            }
             ensureBackgroundWebView(() -> {
                 try {
                     JSONObject reqSpec = new JSONObject();
@@ -303,6 +316,25 @@ public class TwitterAuthPlugin extends Plugin {
     private int dp(int value) {
         return Math.round(TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP, value, getContext().getResources().getDisplayMetrics()));
+    }
+
+    private static void syncCookiesToWebView(String cookieHeader) {
+        if (cookieHeader == null || cookieHeader.isEmpty()) return;
+        CookieManager cm = CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        String[] parts = cookieHeader.split(";");
+        for (String part : parts) {
+            String trimmed = part.trim();
+            int eq = trimmed.indexOf('=');
+            if (eq <= 0) continue;
+            String name = trimmed.substring(0, eq).trim();
+            String value = trimmed.substring(eq + 1).trim();
+            if (name.isEmpty() || value.isEmpty()) continue;
+            cm.setCookie(
+                    "https://x.com",
+                    name + "=" + value + "; domain=.x.com; path=/; Secure; SameSite=None");
+        }
+        cm.flush();
     }
 
     private static String extractCookie(String cookieHeader, String name) {
