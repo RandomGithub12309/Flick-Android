@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, FileText, Link2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Link2 } from "lucide-react";
 import type { FlickPost, FlickVideo } from "@/lib/reddit/types";
 import { SeekBar } from "@/components/seek-bar";
 import { VideoPlayer } from "@/components/video-player";
@@ -9,19 +9,12 @@ import { isRedgifsProxyUrl } from "@/lib/reddit/redgifs";
 import { audioCandidatesFor } from "@/lib/video-sources";
 import { cn, formatScore, isLandscapeRatio, mediaRatio } from "@/lib/utils";
 
-/**
- * How many fresh URLs a slide may ask for before it gives up on playing the
- * clip. Two covers an expired link plus one unlucky retry.
- */
 const MAX_CLIP_RETRIES = 2;
-
-function redgifsWatchUrl(id: string): string {
-  return `https://www.redgifs.com/watch/${id}`;
-}
 
 type Props = {
   post: FlickPost;
   active: boolean;
+  preload?: boolean;
   muted: boolean;
   offset: number;
   drag: number;
@@ -33,6 +26,7 @@ type Props = {
 export function PostSlide({
   post,
   active,
+  preload = false,
   muted,
   offset,
   drag,
@@ -47,17 +41,7 @@ export function PostSlide({
     duration: 0,
   });
   const [galleryIndex, setGalleryIndex] = useState(0);
-  /**
-   * A clip looked up on demand, and whether this slide has run out of ways to
-   * play it. Both are per-post: the feed keys slides by post id.
-   */
   const [clip, setClip] = useState<FlickVideo | null>(null);
-  const [unplayable, setUnplayable] = useState(false);
-  /**
-   * Remount counter for proxy retries: proxy URLs are stable by design, so
-   * replaying one after a fresh server-side resolve needs a new element, not
-   * a new URL.
-   */
   const [attempt, setAttempt] = useState(0);
   const videoRef = useRef<VideoHandle>(null);
   const retries = useRef(0);
@@ -71,54 +55,57 @@ export function PostSlide({
   const landscapeVideo = isLandscapeRatio(mediaRatio(video?.width, video?.height));
   const landscapeImage = isLandscapeRatio(mediaRatio(image?.width, image?.height));
 
-  const tryingToPlay = Boolean(video) && !unplayable;
+  const tryingToPlay = Boolean(video);
 
-  // Swiping back to a slide is a fresh chance to play it — including one more
-  // lookup for a clip that came up empty last time. (Declared before the
-  // lookup effect so the reset lands before the lookup's guard is checked.)
   useEffect(() => {
     if (!active) return;
     retries.current = 0;
-    lookedUp.current = false;
-    setUnplayable(false);
   }, [active]);
 
-  // A redgifs post can reach the feed with nothing playable attached: the
-  // lookup failed while loading, or the post is a bare link Reddit never
-  // mirrored. One lookup per activation turns those into videos instead of
-  // leaving a title card (or a skip) in their place.
+  // Pre-resolve Redgifs clips for both the active slide and the upcoming next slide.
+  // If an active video post fails to resolve a playable clip, skip it automatically.
   useEffect(() => {
-    if (!active || post.video || clip || !redgifsId || lookedUp.current) return;
+    if ((!active && !preload) || post.video || clip || !redgifsId || lookedUp.current) return;
     lookedUp.current = true;
     let cancelled = false;
     void requestRedgifsClip(redgifsId).then((resolved) => {
-      if (!cancelled && resolved) setClip(resolved);
+      if (cancelled) return;
+      if (resolved) {
+        setClip(resolved);
+      } else if (active) {
+        onUnplayable?.();
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, [active, clip, post.video, redgifsId]);
+  }, [active, clip, onUnplayable, post.video, preload, redgifsId]);
+
+  // If the slide becomes active after a preload lookup already failed, skip it.
+  useEffect(() => {
+    if (active && !post.video && !clip && redgifsId && lookedUp.current) {
+      void requestRedgifsClip(redgifsId, { fresh: true }).then((resolved) => {
+        if (resolved) setClip(resolved);
+        else onUnplayable?.();
+      });
+    }
+  }, [active, clip, onUnplayable, post.video, redgifsId]);
 
   const handleUnplayable = useCallback(() => {
     if (!redgifsId) {
       onUnplayable?.();
       return;
     }
-    // Reddit's own copy (where one exists) already failed alongside the clip,
-    // so a URL fetched just now is the only thing left to try.
     if (retries.current < MAX_CLIP_RETRIES) {
       retries.current += 1;
       const failedUrl = video?.url;
       const redditCopy = post.video;
       void requestRedgifsClip(redgifsId, { fresh: true }).then((resolved) => {
         if (!resolved) {
-          setUnplayable(true);
+          onUnplayable?.();
           return;
         }
         if (resolved.url !== failedUrl) {
-          // A fresh URL is not a fresh chance to be the last one: keep the
-          // host's own copy, with its audio, as the fallback for the new
-          // attempt too.
           setClip({
             ...resolved,
             fallbackUrl: redditCopy?.fallbackUrl ?? redditCopy?.url,
@@ -126,20 +113,16 @@ export function PostSlide({
           });
           return;
         }
-        // The proxy URL is stable by design, so "same URL" after a fresh
-        // lookup is not a dead end — the server re-resolved behind it. Replay
-        // it on a new element; a new URL string would be needed otherwise.
-        if (resolved.url.startsWith("/api/redgifs/")) {
+        if (isRedgifsProxyUrl(resolved.url)) {
           setAttempt((n) => n + 1);
           return;
         }
-        setUnplayable(true);
+        onUnplayable?.();
       });
       return;
     }
-    // Out of retries. This is a clip someone deliberately saved, so show the
-    // post (poster, title, a way out to redgifs) rather than skipping it.
-    setUnplayable(true);
+    // Out of retries — skip to the next post.
+    onUnplayable?.();
   }, [onUnplayable, post.video, redgifsId, video?.url]);
 
   return (
@@ -149,6 +132,12 @@ export function PostSlide({
         transform: `translate3d(0, calc(${offset * 100}% + ${drag}px), 0)`,
         willChange: "transform",
       }}
+      onClick={(e) => {
+        if (!active || !tryingToPlay) return;
+        const target = e.target as HTMLElement;
+        if (target.closest("button, a, [role='slider']")) return;
+        videoRef.current?.togglePlay();
+      }}
     >
       {tryingToPlay && video ? (
         <VideoPlayer
@@ -156,6 +145,7 @@ export function PostSlide({
           ref={videoRef}
           video={video}
           active={active}
+          preload={preload}
           muted={muted}
           poster={poster}
           uiVisible={uiVisible}
@@ -241,8 +231,6 @@ export function PostSlide({
 
       {uiVisible ? (
         <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-safe pt-16">
-          {/* Only the active slide gets the control — three overlapping
-              scrubbers would fight each other for the same gesture. */}
           {tryingToPlay && active ? (
             <SeekBar
               ratio={playback.ratio}
@@ -264,17 +252,6 @@ export function PostSlide({
               {post.title}
             </h2>
             <p className="mt-1 text-sm text-muted">u/{post.author}</p>
-            {unplayable && redgifsId ? (
-              <a
-                href={redgifsWatchUrl(redgifsId)}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-fg/12 px-3 py-1.5 text-sm font-medium text-fg"
-              >
-                <ExternalLink className="size-4" />
-                Watch on redgifs
-              </a>
-            ) : null}
           </div>
         </div>
       ) : null}

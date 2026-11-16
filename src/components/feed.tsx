@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActionRail } from "@/components/action-rail";
 import { PostSlide } from "@/components/post-slide";
+import { unsaveRedditPost } from "@/lib/reddit/loader";
 import { useFlick } from "@/store/flick";
 
 const THRESHOLD = 72;
@@ -22,11 +23,13 @@ export function Feed() {
   const index = useFlick((s) => s.index);
   const muted = useFlick((s) => s.muted);
   const source = useFlick((s) => s.source);
+  const session = useFlick((s) => s.session);
   const notice = useFlick((s) => s.notice);
   const setNotice = useFlick((s) => s.setNotice);
   const next = useFlick((s) => s.next);
   const prev = useFlick((s) => s.prev);
   const reroll = useFlick((s) => s.reroll);
+  const removePost = useFlick((s) => s.removePost);
   const toggleMuted = useFlick((s) => s.toggleMuted);
   const signOut = useFlick((s) => s.signOut);
   const setScreen = useFlick((s) => s.setScreen);
@@ -208,13 +211,16 @@ export function Feed() {
           key={`${item.id}-${i === index ? "a" : offset}`}
           post={item}
           active={offset === 0 && !animating}
+          preload={offset === 1}
           muted={muted}
           offset={offset}
           drag={drag}
           animating={animating || startY.current != null}
           uiVisible={controlsVisible}
           onUnplayable={
-            offset === 0 && !animating && item.kind === "video" ? skipUnplayable : undefined
+            offset === 0 && !animating && (item.kind === "video" || Boolean(item.redgifsId))
+              ? skipUnplayable
+              : undefined
           }
         />
       ))}
@@ -274,6 +280,18 @@ export function Feed() {
             sourceLabel="Reddit"
             onShuffle={reroll}
             onToggleMute={toggleMuted}
+            onUnsave={
+              source === "saved" && session
+                ? () => {
+                    const target = post;
+                    removePost(target.id);
+                    setSkipNotice("Unsaved from Reddit");
+                    void unsaveRedditPost(session, target.name).catch(() => {
+                      setSkipNotice("Could not unsave on Reddit");
+                    });
+                  }
+                : undefined
+            }
             onSignOut={source === "saved" ? signOut : undefined}
           />
         </>

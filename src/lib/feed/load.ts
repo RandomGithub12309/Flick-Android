@@ -1,7 +1,7 @@
 import { loadDemoFeed, loadSavedFeed } from "@/lib/reddit/loader";
 import { useFlick } from "@/store/flick";
 import type { FlickPost } from "@/lib/reddit/types";
-import type { FeedSource } from "@/store/flick";
+import type { FeedSource, MediaFilter } from "@/store/flick";
 
 export type RedditLane = "saved" | "demo";
 
@@ -15,6 +15,17 @@ export type FeedResult = {
   source: FeedSource;
   notice: string | null;
 };
+
+export function applyDeckFilters(
+  posts: FlickPost[],
+  options: { mediaFilter: MediaFilter; showNsfw: boolean },
+): FlickPost[] {
+  return posts.filter((post) => {
+    if (!options.showNsfw && post.nsfw) return false;
+    if (options.mediaFilter === "video" && post.kind !== "video" && !post.redgifsId) return false;
+    return true;
+  });
+}
 
 export function requestFor(state: { session: { username: string } | null }): FeedRequest {
   return {
@@ -33,13 +44,25 @@ export async function loadDeck(
 ): Promise<FeedResult> {
   const state = useFlick.getState();
   const reddit: RedditLane = request.reddit === "saved" && !state.session ? "demo" : request.reddit;
+  const filterOpts = { mediaFilter: state.mediaFilter, showNsfw: state.showNsfw };
 
   if (reddit === "saved" && state.session) {
-    const posts = await loadSavedFeed(state.session, { onCount: (count) => onProgress?.(count) });
-    return { posts, source: "saved", notice: null };
+    const raw = await loadSavedFeed(state.session, {
+      onCount: (count) => onProgress?.(count),
+      onMore: (more) => {
+        const cur = useFlick.getState();
+        if (cur.screen === "feed" && cur.source === "saved") {
+          cur.appendPosts(
+            applyDeckFilters(more, { mediaFilter: cur.mediaFilter, showNsfw: cur.showNsfw }),
+          );
+        }
+      },
+    });
+    return { posts: applyDeckFilters(raw, filterOpts), source: "saved", notice: null };
   }
 
-  const posts = await loadDemoFeed();
+  const raw = await loadDemoFeed(state.customSubreddits);
+  const posts = applyDeckFilters(raw, filterOpts);
   onProgress?.(posts.length);
   return { posts, source: "demo", notice: null };
 }
@@ -57,7 +80,9 @@ export async function refreshDeck(request?: Partial<FeedRequest>): Promise<boole
   );
   if (result.posts.length === 0) {
     store.setScreen("home");
-    store.setError("Nothing playable came back — try saving a video on Reddit or playing the sample mix.");
+    store.setError(
+      "Nothing playable matched your filters — try adjusting NSFW/video filters or subreddits.",
+    );
     return false;
   }
   store.setPosts(result.posts, result.source);

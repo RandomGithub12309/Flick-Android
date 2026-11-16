@@ -326,11 +326,14 @@ export async function nativeFetchSavedPage(input: {
 
 const DEMO_SUBS = ["Unexpected", "nextfuckinglevel", "Damnthatsinteresting", "nsfw", "NSFW_GIF"];
 
-export async function nativeFetchDemoFeed(): Promise<FlickPost[]> {
+export async function nativeFetchDemoFeed(subreddits?: string[]): Promise<FlickPost[]> {
+  const subs = subreddits && subreddits.length > 0 ? subreddits : DEMO_SUBS;
   const collected: FlickPost[] = [];
   const results = await Promise.allSettled(
-    DEMO_SUBS.map(async (sub) => {
-      const url = `https://arctic-shift.photon-reddit.com/api/posts/search?subreddit=${encodeURIComponent(sub)}&limit=20&sort=desc&sort_type=created_utc`;
+    subs.map(async (sub) => {
+      const clean = sub.replace(/^\/?r\//i, "").trim();
+      if (!clean) return [];
+      const url = `https://arctic-shift.photon-reddit.com/api/posts/search?subreddit=${encodeURIComponent(clean)}&limit=20&sort=desc&sort_type=created_utc`;
       const res = await CapacitorHttp.request({
         url,
         method: "GET",
@@ -357,4 +360,26 @@ export async function nativeFetchDemoFeed(): Promise<FlickPost[]> {
     if (!unique.has(post.id)) unique.set(post.id, post);
   }
   return [...unique.values()];
+}
+
+export async function nativeUnsavePost(input: {
+  accessToken: string;
+  fullname: string;
+}): Promise<void> {
+  const res = await CapacitorHttp.request({
+    url: `${OAUTH}/api/unsave`,
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.accessToken}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": USER_AGENT,
+    },
+    data: new URLSearchParams({ id: input.fullname }).toString(),
+  });
+  if (res.status === 401) {
+    throw new Error("Reddit session expired. Sign in again.");
+  }
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Could not unsave post (${res.status})`);
+  }
 }

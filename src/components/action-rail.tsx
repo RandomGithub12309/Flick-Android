@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
-import { Dices, ExternalLink, LogOut, Volume2, VolumeX } from "lucide-react";
+import { BookmarkMinus, Dices, ExternalLink, LogOut, Volume2, VolumeX } from "lucide-react";
 
 type Props = {
   muted: boolean;
   permalink: string;
-  /** Which host this post came from — the link out goes there, not to Reddit. */
   sourceLabel?: string;
   onShuffle: () => void;
   onToggleMute: () => void;
+  onUnsave?: () => void;
   onSignOut?: () => void;
 };
 
@@ -40,6 +40,7 @@ export function ActionRail({
   sourceLabel = "Reddit",
   onShuffle,
   onToggleMute,
+  onUnsave,
   onSignOut,
 }: Props) {
   return (
@@ -50,6 +51,11 @@ export function ActionRail({
       <RailButton label="Shuffle" onClick={onShuffle}>
         <Dices className="size-6" />
       </RailButton>
+      {onUnsave ? (
+        <RailButton label="Unsave" onClick={onUnsave}>
+          <BookmarkMinus className="size-5" />
+        </RailButton>
+      ) : null}
       <a
         href={permalink}
         target="_blank"

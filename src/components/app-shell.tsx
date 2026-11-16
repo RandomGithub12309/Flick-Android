@@ -1,10 +1,11 @@
 import { useEffect } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
 import { ConnectForm } from "@/components/connect-form";
 import { Feed } from "@/components/feed";
 import { Landing } from "@/components/landing";
 import { completeAuthorizeWatch, stopAuthorizeWatch } from "@/lib/reddit/authorize-watch";
 import { completeOAuthCode } from "@/lib/reddit/oauth-complete";
-import { registerNativeOauthListener } from "@/lib/reddit/native-oauth";
+import { isNative, registerNativeOauthListener } from "@/lib/reddit/native-oauth";
 import { ensureLocalServer } from "@/lib/reddit/native-server";
 import { useFlick } from "@/store/flick";
 
@@ -27,8 +28,6 @@ export function AppShell() {
     const onMessage = (event: MessageEvent) => {
       const data = event.data as { type?: string; code?: string; state?: string };
       if (data?.type !== "flick-oauth" || !data.code) return;
-      // Sign-in succeeded — cancel the popup watcher so its timeout can't
-      // overwrite the feed with a stale "sign-in failed" message.
       completeAuthorizeWatch();
       void completeOAuthCode(data.code, data.state ?? "");
     };
@@ -39,12 +38,24 @@ export function AppShell() {
     };
   }, []);
 
-  // Native (Android): Reddit hands back a flick://oauth deep link instead of
-  // posting a message from a popup, and the embedded loopback server streams
-  // redgifs clips locally without an external backend.
   useEffect(() => {
     void ensureLocalServer();
-    return registerNativeOauthListener();
+    const stopOauth = registerNativeOauthListener();
+    if (!isNative()) return stopOauth;
+
+    const backPromise = CapacitorApp.addListener("backButton", () => {
+      const state = useFlick.getState();
+      if (state.screen !== "home") {
+        state.setScreen("home");
+      } else {
+        void CapacitorApp.exitApp();
+      }
+    });
+
+    return () => {
+      stopOauth();
+      void backPromise.then((h) => h.remove());
+    };
   }, []);
 
   return (

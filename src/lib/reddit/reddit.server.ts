@@ -490,14 +490,18 @@ let demoCache: CacheEntry | null = null;
 
 const DEMO_SUBS = ["Unexpected", "nextfuckinglevel", "Damnthatsinteresting", "nsfw", "NSFW_GIF"];
 
-export async function fetchDemoFeed(): Promise<FlickPost[]> {
-  if (demoCache && Date.now() - demoCache.at < 8 * 60 * 1000) {
+export async function fetchDemoFeed(subreddits?: string[]): Promise<FlickPost[]> {
+  const subs = subreddits && subreddits.length > 0 ? subreddits : DEMO_SUBS;
+  const isDefault = subs === DEMO_SUBS || subs.join(",") === DEMO_SUBS.join(",");
+  if (isDefault && demoCache && Date.now() - demoCache.at < 8 * 60 * 1000) {
     return demoCache.posts;
   }
   const collected: FlickPost[] = [];
   const results = await Promise.allSettled(
-    DEMO_SUBS.map(async (sub) => {
-      const url = `https://arctic-shift.photon-reddit.com/api/posts/search?subreddit=${encodeURIComponent(sub)}&limit=20&sort=desc&sort_type=created_utc`;
+    subs.map(async (sub) => {
+      const clean = sub.replace(/^\/?r\//i, "").trim();
+      if (!clean) return [];
+      const url = `https://arctic-shift.photon-reddit.com/api/posts/search?subreddit=${encodeURIComponent(clean)}&limit=20&sort=desc&sort_type=created_utc`;
       const res = await fetch(url, {
         headers: { "User-Agent": USER_AGENT },
         signal: AbortSignal.timeout(8000),
@@ -519,15 +523,36 @@ export async function fetchDemoFeed(): Promise<FlickPost[]> {
     if (!unique.has(post.id)) unique.set(post.id, post);
   }
   let posts = [...unique.values()];
-  if (posts.length < 8) posts = [...FALLBACK_POSTS, ...posts];
+  if (isDefault && posts.length < 8) posts = [...FALLBACK_POSTS, ...posts];
   const seen = new Set<string>();
   posts = posts.filter((p) => {
     if (seen.has(p.id)) return false;
     seen.add(p.id);
     return true;
   });
-  demoCache = { at: Date.now(), posts };
+  if (isDefault) demoCache = { at: Date.now(), posts };
   return posts;
+}
+
+export async function unsavePost(input: {
+  accessToken: string;
+  fullname: string;
+}): Promise<void> {
+  const res = await fetch(`${OAUTH}/api/unsave`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.accessToken}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": USER_AGENT,
+    },
+    body: new URLSearchParams({ id: input.fullname }),
+  });
+  if (res.status === 401) {
+    throw new Error("Reddit session expired. Sign in again.");
+  }
+  if (!res.ok) {
+    throw new Error(`Could not unsave post (${res.status})`);
+  }
 }
 
 const FALLBACK_POSTS: FlickPost[] = [

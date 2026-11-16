@@ -1,20 +1,30 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { orderDeck } from "@/lib/feed/mix";
+import { mediaKeyOf, orderDeck } from "@/lib/feed/mix";
 import type { FlickPost, RedditSession } from "@/lib/reddit/types";
 
 export type Screen = "home" | "connect" | "loading" | "feed";
 export type FeedSource = "saved" | "demo";
+export type MediaFilter = "all" | "video";
+
+export const DEFAULT_SUBREDDITS = [
+  "Unexpected",
+  "nextfuckinglevel",
+  "Damnthatsinteresting",
+  "nsfw",
+  "NSFW_GIF",
+];
 
 type FlickState = {
   ageOk: boolean;
   screen: Screen;
   source: FeedSource;
   session: RedditSession | null;
-  /**
-   * Overrides the redirect URI sent to Reddit. Empty means "use Flick's own".
-   */
+  redditClientId: string;
   redditRedirectUri: string;
+  customSubreddits: string[];
+  mediaFilter: MediaFilter;
+  showNsfw: boolean;
   posts: FlickPost[];
   index: number;
   muted: boolean;
@@ -25,11 +35,17 @@ type FlickState = {
   acceptAge: () => void;
   setScreen: (screen: Screen) => void;
   setSession: (session: RedditSession | null) => void;
+  setRedditClientId: (clientId: string) => void;
+  setRedditRedirectUri: (uri: string) => void;
+  setCustomSubreddits: (subs: string[]) => void;
+  setMediaFilter: (filter: MediaFilter) => void;
+  setShowNsfw: (show: boolean) => void;
   setError: (error: string | null) => void;
   setNotice: (notice: string | null) => void;
   setLoading: (label: string, count?: number) => void;
   setPosts: (posts: FlickPost[], source: FeedSource) => void;
-  setRedditRedirectUri: (uri: string) => void;
+  appendPosts: (more: FlickPost[]) => void;
+  removePost: (id: string) => void;
   setIndex: (index: number) => void;
   next: () => void;
   prev: () => void;
@@ -42,7 +58,11 @@ export const useFlick = create<FlickState>()(
   persist(
     (set, get) => ({
       ageOk: false,
+      redditClientId: "",
       redditRedirectUri: "",
+      customSubreddits: DEFAULT_SUBREDDITS,
+      mediaFilter: "all",
+      showNsfw: true,
       screen: "home",
       source: "demo",
       session: null,
@@ -56,6 +76,14 @@ export const useFlick = create<FlickState>()(
       acceptAge: () => set({ ageOk: true }),
       setScreen: (screen) => set({ screen, error: null }),
       setSession: (session) => set({ session }),
+      setRedditClientId: (clientId) => set({ redditClientId: clientId.trim() }),
+      setRedditRedirectUri: (uri) => set({ redditRedirectUri: uri.trim() }),
+      setCustomSubreddits: (subs) =>
+        set({
+          customSubreddits: subs.length > 0 ? subs : DEFAULT_SUBREDDITS,
+        }),
+      setMediaFilter: (mediaFilter) => set({ mediaFilter }),
+      setShowNsfw: (showNsfw) => set({ showNsfw }),
       setError: (error) => set({ error }),
       setNotice: (notice) => set({ notice }),
       setLoading: (label, count = 0) =>
@@ -67,10 +95,42 @@ export const useFlick = create<FlickState>()(
           source,
           index: 0,
           screen: deck.length > 0 ? "feed" : "home",
-          error: deck.length === 0 ? "Nothing to play. Save a video on Reddit first." : null,
+          error: deck.length === 0 ? "Nothing to play. Try adjusting your filters or saving a video." : null,
         });
       },
-      setRedditRedirectUri: (uri) => set({ redditRedirectUri: uri.trim() }),
+      appendPosts: (more) => {
+        if (more.length === 0) return;
+        const current = get().posts;
+        const seenIds = new Set(current.map((p) => p.id));
+        const seenKeys = new Set(current.map(mediaKeyOf));
+        const fresh = orderDeck(more).filter((p) => {
+          const key = mediaKeyOf(p);
+          if (seenIds.has(p.id) || seenKeys.has(key)) return false;
+          seenIds.add(p.id);
+          seenKeys.add(key);
+          return true;
+        });
+        if (fresh.length > 0) {
+          set({ posts: [...current, ...fresh] });
+        }
+      },
+      removePost: (id) => {
+        const { posts, index } = get();
+        const nextPosts = posts.filter((p) => p.id !== id);
+        if (nextPosts.length === 0) {
+          set({
+            posts: [],
+            index: 0,
+            screen: "home",
+            error: "No playable posts left in this deck.",
+          });
+          return;
+        }
+        set({
+          posts: nextPosts,
+          index: Math.min(index, nextPosts.length - 1),
+        });
+      },
       setIndex: (index) => {
         const { posts } = get();
         if (posts.length === 0) return;
@@ -112,7 +172,11 @@ export const useFlick = create<FlickState>()(
         ageOk: state.ageOk,
         session: state.session,
         muted: state.muted,
+        redditClientId: state.redditClientId,
         redditRedirectUri: state.redditRedirectUri,
+        customSubreddits: state.customSubreddits,
+        mediaFilter: state.mediaFilter,
+        showNsfw: state.showNsfw,
       }),
     },
   ),

@@ -1,4 +1,4 @@
-import { callDemoFeed, callRefreshGrant, callSavedPage } from "./api";
+import { callDemoFeed, callRefreshGrant, callSavedPage, callUnsavePost } from "./api";
 import type { FlickPost, RedditSession, SavedPage } from "./types";
 import { useFlick } from "@/store/flick";
 
@@ -21,31 +21,68 @@ export async function ensureFreshSession(session: RedditSession): Promise<Reddit
   return updated;
 }
 
-/** Page cap keeps a 40k-post saved list from turning a shuffle into a wait. */
+const INITIAL_PAGES = 2;
 const MAX_PAGES = 10;
 
 export async function loadSavedFeed(
   session: RedditSession,
-  options: { onCount?: (count: number) => void } = {},
+  options: {
+    onCount?: (count: number) => void;
+    onMore?: (posts: FlickPost[]) => void;
+  } = {},
 ): Promise<FlickPost[]> {
   const current = await ensureFreshSession(session);
-  const all: FlickPost[] = [];
+  const initial: FlickPost[] = [];
   let after: string | null | undefined = null;
-  for (let page = 0; page < MAX_PAGES; page++) {
+  let page = 0;
+
+  for (; page < INITIAL_PAGES; page++) {
     const result: SavedPage = await callSavedPage({
       accessToken: current.accessToken,
       username: current.username,
       after: after ?? null,
     });
-    all.push(...result.posts);
-    options.onCount?.(all.length);
+    initial.push(...result.posts);
+    options.onCount?.(initial.length);
     after = result.after;
     if (!after || result.posts.length === 0) break;
   }
-  return all;
+
+  // Continue fetching remaining pages in the background so the player opens fast.
+  if (after && page < MAX_PAGES && options.onMore) {
+    const onMore = options.onMore;
+    let cursor: string | null = after;
+    void (async () => {
+      for (let p = page; p < MAX_PAGES && cursor; p++) {
+        try {
+          const fresh = await ensureFreshSession(useFlick.getState().session ?? current);
+          const nextResult: SavedPage = await callSavedPage({
+            accessToken: fresh.accessToken,
+            username: fresh.username,
+            after: cursor,
+          });
+          if (nextResult.posts.length === 0) break;
+          onMore(nextResult.posts);
+          cursor = nextResult.after;
+        } catch {
+          break;
+        }
+      }
+    })();
+  }
+
+  return initial;
 }
 
 /** Public mix of video subreddits — the lane available without signing in. */
-export async function loadDemoFeed(): Promise<FlickPost[]> {
-  return callDemoFeed();
+export async function loadDemoFeed(subreddits?: string[]): Promise<FlickPost[]> {
+  return callDemoFeed(subreddits);
+}
+
+export async function unsaveRedditPost(session: RedditSession, fullname: string): Promise<void> {
+  const current = await ensureFreshSession(session);
+  await callUnsavePost({
+    accessToken: current.accessToken,
+    fullname,
+  });
 }

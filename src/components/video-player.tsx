@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Play } from "lucide-react";
+import { Loader2, Pause, Play } from "lucide-react";
 import type { FlickVideo } from "@/lib/reddit/types";
 import {
   effectiveDuration,
@@ -29,22 +29,14 @@ function seekableEndOf(el: HTMLMediaElement): number | null {
 }
 
 /**
- * How long the active video gets to actually start before we write it off.
- *
- * This used to be 8s and it also counted `el.paused` as a failure, which
- * discarded videos that were perfectly watchable. A browser that refuses
- * autoplay leaves `play()` rejected and the element paused indefinitely —
- * indistinguishable from dead media at 8s — and a slow connection can hold
- * `readyState` below 3 well past that. So start-up is judged only on whether
- * playback actually began, over a much longer window, and a blocked autoplay
- * becomes a tap-to-play prompt instead of a skip.
+ * How long the active video gets to actually start before we skip it.
  */
-const START_GRACE_MS = 20_000;
+const START_GRACE_MS = 10_000;
 
 export type PlaybackInfo = {
   /** 0..1 through the timeline, or null until the duration is known. */
   ratio: number | null;
-  /** 0..1 buffered ahead of the playhead, or null when the browser won't say. */
+  /** 0..1 buffered ahead of the playhead, or null when unknown. */
   buffered: number | null;
   current: number;
   duration: number;
@@ -53,11 +45,14 @@ export type PlaybackInfo = {
 export type VideoHandle = {
   /** Jump to `ratio` (0..1) of the timeline. A no-op until the duration is known. */
   seek: (ratio: number) => void;
+  /** Toggle pause/play on user tap. */
+  togglePlay: () => void;
 };
 
 type Props = {
   video: FlickVideo;
   active: boolean;
+  preload?: boolean;
   muted: boolean;
   /** Still frame shown behind the video as a blurred backdrop. */
   poster?: string;
@@ -69,46 +64,40 @@ type Props = {
 };
 
 export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
-  { video, active, muted, poster, uiVisible = true, onProgress, onUnplayable },
+  { video, active, preload = false, muted, poster, uiVisible = true, onProgress, onUnplayable },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const startTimer = useRef<number | null>(null);
+  const flashTimer = useRef<number | null>(null);
   const reported = useRef(false);
   const activeRef = useRef(active);
   const blockedRef = useRef(false);
+  const userPausedRef = useRef(false);
   const onUnplayableRef = useRef(onUnplayable);
   activeRef.current = active;
   onUnplayableRef.current = onUnplayable;
+
   const [blocked, setBlocked] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [buffering, setBuffering] = useState(false);
+  const [flashIcon, setFlashIcon] = useState<"play" | "pause" | null>(null);
   const [sourceIndex, setSourceIndex] = useState(0);
   const [audioIndex, setAudioIndex] = useState(0);
   /** Which sidecar URL was explicitly started; a mute toggle must not reload it. */
   const startedAudioSrc = useRef<string | null>(null);
 
-  /**
-   * The preferred file first, then whatever else the post can play — a redgifs
-   * clip carries Reddit's own copy as `fallbackUrl`, for networks where the
-   * redgifs CDN is blocked.
-   */
   const sources = useMemo(() => videoSources(video), [video]);
   const source = sources[sourceIndex];
   const isFallbackSource = sourceIndex > 0;
 
-  /**
-   * Reddit renames its audio files, so try each known URL before giving up.
-   * The list follows the source: a redgifs mp4 has its sound already, and the
-   * sidecar belongs to the fallback it just failed over to.
-   */
   const audioUrls = useMemo(
     () => audioUrlsForSource(video, isFallbackSource),
     [video, isFallbackSource],
   );
   const audioUrl = audioUrls[audioIndex];
-  // Falling back swaps which file the sound comes from, so a candidate index
-  // that made sense for the previous source is meaningless against the new one.
   const audioKey = audioUrls.join("|");
   useEffect(() => {
     setAudioIndex(0);
@@ -119,8 +108,24 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     startTimer.current = null;
   }, []);
 
+  const showFlash = useCallback((kind: "play" | "pause") => {
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    setFlashIcon(kind);
+    flashTimer.current = window.setTimeout(() => {
+      flashTimer.current = null;
+      setFlashIcon(null);
+    }, 550);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    };
+  }, []);
+
   const reportUnplayable = useCallback(
     (reason: VideoFailureReason) => {
+      if (userPausedRef.current) return;
       if (
         !shouldSkipDeadVideo({
           active: activeRef.current,
@@ -139,10 +144,6 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     [clearStartTimer],
   );
 
-  /**
-   * Swap in the next source for this post, or report that there is nothing
-   * left to try. Returns whether a different file is now loading.
-   */
   const advanceSource = useCallback(() => {
     if (sourceIndex + 1 >= sources.length) return false;
     setSourceIndex(sourceIndex + 1);
@@ -152,6 +153,9 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   useEffect(() => {
     setSourceIndex(0);
     setAudioIndex(0);
+    userPausedRef.current = false;
+    setPaused(false);
+    setBuffering(false);
   }, [video.url, video.width, video.height]);
 
   useImperativeHandle(
@@ -164,16 +168,36 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         if (duration <= 0) return;
         const time = Math.min(1, Math.max(0, ratio)) * duration;
         el.currentTime = time;
-        // The sidecar may not have metadata yet — setting currentTime then
-        // throws, and must not take the video's seek down with it.
         try {
           if (audioRef.current) audioRef.current.currentTime = time;
         } catch {
           // The timeupdate sync pulls it back in line once it can seek.
         }
       },
+      togglePlay() {
+        const el = videoRef.current;
+        const audio = audioRef.current;
+        if (!el || !activeRef.current) return;
+        if (el.paused) {
+          userPausedRef.current = false;
+          setPaused(false);
+          showFlash("play");
+          void el.play().then(
+            () => {
+              if (audio && !muted) void audio.play().catch(() => undefined);
+            },
+            () => undefined,
+          );
+        } else {
+          userPausedRef.current = true;
+          setPaused(true);
+          showFlash("pause");
+          el.pause();
+          audio?.pause();
+        }
+      },
     }),
-    [],
+    [muted, showFlash],
   );
 
   useEffect(() => {
@@ -183,14 +207,12 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
 
     const syncAudio = () => {
       if (!audio) return;
-      if (Math.abs(el.currentTime - audio.currentTime) > 0.35) {
+      if (Math.abs(el.currentTime - audio.currentTime) > 0.25) {
         audio.currentTime = el.currentTime;
       }
     };
 
     const publish = () => {
-      // Fragmented uploads report Infinity/NaN duration; the seekable window
-      // is the timeline then, and without it the seek bar stays disabled.
       const duration = effectiveDuration(el.duration, seekableEndOf(el));
       let buffered: number | null = null;
       if (duration > 0 && el.buffered.length > 0) {
@@ -211,7 +233,16 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     const onPlaying = () => {
       blockedRef.current = false;
       setBlocked(false);
+      setBuffering(false);
       clearStartTimer();
+    };
+
+    const onWaiting = () => {
+      if (activeRef.current && !userPausedRef.current) setBuffering(true);
+    };
+
+    const onCanPlay = () => {
+      setBuffering(false);
     };
 
     const onTime = () => {
@@ -225,9 +256,13 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     };
 
     const offs = [
-      on("play", () => void audio?.play().catch(() => undefined)),
+      on("play", () => {
+        if (!userPausedRef.current) void audio?.play().catch(() => undefined);
+      }),
       on("pause", () => audio?.pause()),
       on("playing", onPlaying),
+      on("waiting", onWaiting),
+      on("canplay", onCanPlay),
       on("timeupdate", onTime),
       on("progress", publish),
       on("durationchange", publish),
@@ -241,8 +276,6 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       }),
     ];
 
-    // The audio file starts at 0, so joining a video that is already playing
-    // (a swapped-in candidate, a fallback source) needs an explicit jump.
     const onLoadedAudio = () => {
       if (!audio) return;
       syncAudio();
@@ -256,9 +289,6 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     };
   }, [advanceSource, audioUrl, clearStartTimer, onProgress, reportUnplayable, source]);
 
-  // A wrong guess at Reddit's audio file name must not write the post off —
-  // move on to the next candidate instead. The video keeps playing silently in
-  // the meantime, which beats skipping a post that is otherwise fine.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -283,22 +313,21 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       el.pause();
       audio?.pause();
       blockedRef.current = false;
+      userPausedRef.current = false;
       setBlocked(false);
+      setPaused(false);
+      setBuffering(false);
       return;
     }
-    // The sidecar starts explicitly with the picture — not just off the
-    // video's `play` event. Flipping `preload` from "none" does not reliably
-    // kick off a load on its own, and a sidecar that never loads is a video
-    // that plays silent with no error ever firing. Each URL loads once: this
-    // effect also runs on mute toggles, and those must not restart the audio.
     if (audio && audioUrl && startedAudioSrc.current !== audioUrl) {
       startedAudioSrc.current = audioUrl;
       try {
         audio.load();
       } catch {
-        // A redundant load() is harmless; a missing one is silence.
+        // Ignore redundant load error
       }
     }
+    if (userPausedRef.current) return;
     void el.play().then(
       () => {
         blockedRef.current = false;
@@ -306,8 +335,6 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         if (audio && !muted) void audio.play().catch(() => undefined);
       },
       (err: unknown) => {
-        // Autoplay refused: the media is fine, the browser just wants a
-        // gesture first. Ask for one rather than skipping a good post.
         if ((err as { name?: string } | null)?.name === "NotAllowedError") {
           blockedRef.current = true;
           setBlocked(true);
@@ -316,9 +343,24 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     );
   }, [active, audioUrl, muted, source, video.url]);
 
-  // Only the active slide judges itself. Keep the grace timer tied to slide
-  // activation, not callback/render changes, so a watchdog re-arm cannot make
-  // a video that is already playing look like it never started.
+  // Keep screen awake while an active video is playing.
+  useEffect(() => {
+    if (!active || paused) return;
+    let wakeLock: { release: () => Promise<void> } | null = null;
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (type: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    nav.wakeLock
+      ?.request("screen")
+      .then((lock) => {
+        wakeLock = lock;
+      })
+      .catch(() => {});
+    return () => {
+      void wakeLock?.release().catch(() => {});
+    };
+  }, [active, paused]);
+
   useEffect(() => {
     if (!active) {
       clearStartTimer();
@@ -330,8 +372,6 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
 
     startTimer.current = window.setTimeout(() => {
       startTimer.current = null;
-      // A source that stalls and a file that is dead look identical from here,
-      // so the fallback gets one chance before the post is written off.
       if (!advanceSource()) reportUnplayable("start-timeout");
     }, START_GRACE_MS);
 
@@ -349,13 +389,6 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
           className="pointer-events-none absolute inset-0 size-full object-cover opacity-40 blur-2xl scale-110"
         />
       ) : null}
-      {/*
-        Always contained: the whole frame stays visible on every screen shape.
-        Cover-cropping "portrait" clips sliced heads on wide viewports, and any
-        mismatch between the tagged dimensions and the real file cropped blind.
-        On a phone a portrait clip still fills the frame — containment only
-        shows its bars when the aspects actually disagree.
-      */}
       <video
         ref={videoRef}
         src={source}
@@ -364,9 +397,27 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         loop
         autoPlay={active}
         muted={muted}
-        preload={active ? "auto" : "metadata"}
+        preload={active || preload ? "auto" : "metadata"}
         className="absolute inset-0 size-full bg-black object-contain"
       />
+      {buffering && active && !paused && !blocked ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+          <span className="flex size-12 items-center justify-center rounded-full bg-bg/55 text-fg backdrop-blur-sm">
+            <Loader2 className="size-6 animate-spin" />
+          </span>
+        </div>
+      ) : null}
+      {flashIcon || (paused && active) ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+          <span className="flex size-16 items-center justify-center rounded-full bg-bg/55 text-fg backdrop-blur-sm">
+            {paused || flashIcon === "pause" ? (
+              <Pause className="size-7" fill="currentColor" />
+            ) : (
+              <Play className="size-7 translate-x-0.5" fill="currentColor" />
+            )}
+          </span>
+        </div>
+      ) : null}
       {blocked && uiVisible ? (
         <button
           type="button"
@@ -377,12 +428,12 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
             const el = videoRef.current;
             const audio = audioRef.current;
             if (!el) return;
+            userPausedRef.current = false;
+            setPaused(false);
             void el.play().then(
               () => {
                 blockedRef.current = false;
                 setBlocked(false);
-                // A real gesture: start the sidecar here too, not just the
-                // picture, or the tap buys video with no sound.
                 if (audio && !muted) void audio.play().catch(() => undefined);
               },
               () => undefined,
@@ -395,7 +446,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         </button>
       ) : null}
       {audioUrl ? (
-        <audio ref={audioRef} src={audioUrl} loop preload={active ? "auto" : "none"} />
+        <audio ref={audioRef} src={audioUrl} loop preload={active || preload ? "auto" : "none"} />
       ) : null}
     </div>
   );

@@ -5,6 +5,7 @@ import {
   nativeFetchSavedPage,
   nativeRefreshGrant,
   nativeResolveRedgifsClip,
+  nativeUnsavePost,
 } from "./reddit.native";
 import type { FlickPost, SavedPage } from "./types";
 import type { RedgifsClip, TokenBundle } from "./reddit.native";
@@ -55,12 +56,23 @@ export async function callSavedPage(input: {
   return redditSavedPage({ data: input });
 }
 
-export async function callDemoFeed(): Promise<FlickPost[]> {
+export async function callDemoFeed(subreddits?: string[]): Promise<FlickPost[]> {
   if (native()) {
-    return nativeFetchDemoFeed();
+    return nativeFetchDemoFeed(subreddits);
   }
   const { redditDemoFeed } = await import("./functions");
-  return redditDemoFeed();
+  return redditDemoFeed({ data: { subreddits } });
+}
+
+export async function callUnsavePost(input: {
+  accessToken: string;
+  fullname: string;
+}): Promise<void> {
+  if (native()) {
+    return nativeUnsavePost(input);
+  }
+  const { redditUnsave } = await import("./functions");
+  return redditUnsave({ data: input });
 }
 
 export async function callRedgifsClip(input: {

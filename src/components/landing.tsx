@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Layers, Smartphone, Volume2 } from "lucide-react";
+import { Download, Layers, Smartphone, Volume2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SourceChips } from "@/components/source-chips";
 import { refreshDeck } from "@/lib/feed/load";
+import { checkForAppUpdate, openUpdateDownload, type AppUpdateInfo } from "@/lib/reddit/app-update";
 import { isNative } from "@/lib/reddit/native-oauth";
 import { useFlick } from "@/store/flick";
 
@@ -20,12 +21,16 @@ export function Landing() {
   const [busy, setBusy] = useState(false);
   const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [standalone, setStandalone] = useState(() => isNative());
+  const [update, setUpdate] = useState<AppUpdateInfo | null>(null);
 
   const primaryLabel = session ? `Shuffle u/${session.username}` : "Try a sample shuffle";
 
   useEffect(() => {
     if (isNative()) {
       setStandalone(true);
+      void checkForAppUpdate().then((info) => {
+        if (info) setUpdate(info);
+      });
       return;
     }
     const media = window.matchMedia("(display-mode: standalone)");
@@ -92,7 +97,7 @@ export function Landing() {
           <ul className="mt-8 space-y-3 text-sm text-muted">
             <li className="flex items-center gap-3">
               <Layers className="size-4 shrink-0 text-fg" />
-              Swipe through videos, galleries, and images with one unified player.
+              Tap to pause, swipe to advance, and auto-skip broken clips.
             </li>
             <li className="flex items-center gap-3">
               <Volume2 className="size-4 shrink-0 text-fg" />
@@ -100,7 +105,7 @@ export function Landing() {
             </li>
             <li className="flex items-center gap-3">
               <span className="inline-block size-4 shrink-0 rounded-full bg-danger/70" />
-              NSFW is shown. Nothing is blurred.
+              NSFW is shown by default (configurable in settings).
             </li>
             {!standalone ? (
               <li className="flex items-center gap-3">
@@ -112,6 +117,18 @@ export function Landing() {
         </div>
 
         <div className="mt-6 flex flex-col gap-3 pb-8">
+          {update ? (
+            <Button
+              size="md"
+              variant="secondary"
+              className="w-full gap-2"
+              onClick={() => void openUpdateDownload(update.downloadUrl)}
+            >
+              <Download className="size-4" />
+              Update available ({update.versionName}) — Install
+            </Button>
+          ) : null}
+
           <SourceChips />
 
           {error ? <p className="text-sm text-danger">{error}</p> : null}
@@ -131,7 +148,7 @@ export function Landing() {
             </Button>
           ) : null}
           <Button size="md" variant="ghost" className="w-full" onClick={() => setScreen("connect")}>
-            {session ? "Reddit account" : "Connect Reddit"}
+            {session ? "Reddit & filters" : "Connect Reddit & filters"}
           </Button>
           {installEvent && !standalone ? (
             <Button

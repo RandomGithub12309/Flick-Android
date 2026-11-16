@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { refreshDeck } from "@/lib/feed/load";
 import { trackAuthorizePopup } from "@/lib/reddit/authorize-watch";
 import { NATIVE_REDIRECT_URI, isNative, openNativeAuthorize } from "@/lib/reddit/native-oauth";
-import { useFlick } from "@/store/flick";
+import { DEFAULT_SUBREDDITS, useFlick } from "@/store/flick";
 
 function redirectUri(): string {
   if (isNative()) return NATIVE_REDIRECT_URI;
@@ -26,10 +26,19 @@ export function ConnectForm() {
   const error = useFlick((s) => s.error);
   const session = useFlick((s) => s.session);
   const signOut = useFlick((s) => s.signOut);
+  const savedClientId = useFlick((s) => s.redditClientId);
+  const setSavedClientId = useFlick((s) => s.setRedditClientId);
+  const customSubreddits = useFlick((s) => s.customSubreddits);
+  const setCustomSubreddits = useFlick((s) => s.setCustomSubreddits);
+  const mediaFilter = useFlick((s) => s.mediaFilter);
+  const setMediaFilter = useFlick((s) => s.setMediaFilter);
+  const showNsfw = useFlick((s) => s.showNsfw);
+  const setShowNsfw = useFlick((s) => s.setShowNsfw);
 
-  const [clientId, setClientId] = useState("");
+  const [clientId, setClientId] = useState(() => savedClientId);
+  const [subsInput, setSubsInput] = useState(() => customSubreddits.join(", "));
   const [busy, setBusy] = useState(false);
-  const [help, setHelp] = useState(() => isNative());
+  const [help, setHelp] = useState(() => isNative() && !savedClientId);
   const override = useFlick((s) => s.redditRedirectUri);
   const setOverride = useFlick((s) => s.setRedditRedirectUri);
   const [showOverride, setShowOverride] = useState(() =>
@@ -38,22 +47,34 @@ export function ConnectForm() {
   const defaultRedirect = useMemo(() => redirectUri(), []);
   const oauthRedirect = override || defaultRedirect;
 
+  function saveSubreddits() {
+    const parsed = subsInput
+      .split(/[\s,]+/)
+      .map((s) => s.replace(/^\/?r\//i, "").trim())
+      .filter(Boolean);
+    const next = parsed.length > 0 ? parsed : DEFAULT_SUBREDDITS;
+    setCustomSubreddits(next);
+    setSubsInput(next.join(", "));
+  }
+
   async function authorizeInBrowser() {
-    if (!clientId.trim()) {
+    const trimmed = clientId.trim();
+    if (!trimmed) {
       setError("Add your Reddit app ID first.");
       return;
     }
+    setSavedClientId(trimmed);
     const state = randomState();
     sessionStorage.setItem(
       "flick.oauth",
       JSON.stringify({
         state,
-        clientId: clientId.trim(),
+        clientId: trimmed,
         redirectUri: oauthRedirect,
       }),
     );
     const url = new URL("https://www.reddit.com/api/v1/authorize.compact");
-    url.searchParams.set("client_id", clientId.trim());
+    url.searchParams.set("client_id", trimmed);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("state", state);
     url.searchParams.set("redirect_uri", oauthRedirect);
@@ -72,6 +93,7 @@ export function ConnectForm() {
   }
 
   async function playDemo() {
+    saveSubreddits();
     setBusy(true);
     setError(null);
     try {
@@ -97,9 +119,9 @@ export function ConnectForm() {
           <ArrowLeft className="size-5" />
         </Button>
         <div>
-          <h1 className="text-lg font-semibold">Reddit</h1>
+          <h1 className="text-lg font-semibold">Reddit &amp; Filters</h1>
           <p className="text-sm text-muted">
-            {session ? `Signed in as u/${session.username}` : "Connect your saved posts."}
+            {session ? `Signed in as u/${session.username}` : "Connect your saved posts or customize subreddits."}
           </p>
         </div>
       </header>
@@ -115,6 +137,67 @@ export function ConnectForm() {
           </Button>
         </div>
       ) : null}
+
+      <section className="mb-6 flex flex-col gap-3 rounded-xl bg-surface-2 p-4 shadow-[var(--shadow-border)]">
+        <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-muted">Deck filters</h2>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={mediaFilter === "all" ? "primary" : "ghost"}
+            className="flex-1"
+            onClick={() => setMediaFilter("all")}
+          >
+            All media
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={mediaFilter === "video" ? "primary" : "ghost"}
+            className="flex-1"
+            onClick={() => setMediaFilter("video")}
+          >
+            Videos only
+          </Button>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant={showNsfw ? "secondary" : "ghost"}
+          className="w-full justify-between"
+          onClick={() => setShowNsfw(!showNsfw)}
+        >
+          <span>NSFW posts</span>
+          <span className="text-xs text-muted">{showNsfw ? "Shown" : "Hidden"}</span>
+        </Button>
+      </section>
+
+      <section className="mb-6 flex flex-col gap-2">
+        <Label htmlFor="subs">Sample / no-login subreddits</Label>
+        <Input
+          id="subs"
+          value={subsInput}
+          onChange={(e) => setSubsInput(e.target.value)}
+          onBlur={saveSubreddits}
+          autoCapitalize="off"
+          spellCheck={false}
+          placeholder="Unexpected, nextfuckinglevel, ..."
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          size="md"
+          className="w-full"
+          disabled={busy}
+          onClick={() => void playDemo()}
+        >
+          Play subreddit mix
+        </Button>
+      </section>
+
+      <h2 className="mb-3 text-xs font-medium uppercase tracking-[0.18em] text-muted">
+        Reddit account
+      </h2>
 
       <form
         className="flex flex-col gap-4 pb-6"
@@ -148,8 +231,7 @@ export function ConnectForm() {
               spellCheck={false}
             />
             <p className="text-xs leading-normal text-subtle">
-              Reddit only accepts the exact redirect URI already registered on that app. Paste
-              whatever is listed there — if it leaves Flick, the code never comes back. Leave blank
+              Reddit only accepts the exact redirect URI already registered on that app. Leave blank
               to use Flick&rsquo;s own:{" "}
               <span className="break-all text-muted">{defaultRedirect}</span>
             </p>
@@ -168,16 +250,6 @@ export function ConnectForm() {
 
         <Button type="submit" size="lg" className="mt-2 w-full" disabled={busy}>
           Authorize in browser
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="md"
-          className="w-full"
-          disabled={busy}
-          onClick={() => void playDemo()}
-        >
-          Play a sample feed
         </Button>
 
         <button
@@ -201,9 +273,7 @@ export function ConnectForm() {
                 <ExternalLink className="ml-1 inline size-3.5" />
               </a>{" "}
               and create an app. Set the type to <span className="text-fg">installed app</span> — do{" "}
-              <span className="text-fg">not</span> pick script or web app. Installed apps issue no
-              client secret and Flick never asks for one; script and web apps are rejected at
-              sign-in.
+              <span className="text-fg">not</span> pick script or web app.
             </li>
             <li>
               Redirect URI:{" "}
@@ -211,17 +281,7 @@ export function ConnectForm() {
                 {oauthRedirect || "http://localhost:8080/oauth"}
               </span>
             </li>
-            <li>
-              That string must match your Reddit app <span className="text-fg">exactly</span> —
-              Reddit checks it before you press Allow, and if it differs it fails the grant on its
-              own page showing <span className="text-fg">{"{}"}</span> and never returns to Flick.
-            </li>
             <li>Copy the ID under the app name into the field above.</li>
-            <li>
-              Already have an <span className="text-fg">installed app</span> you can&rsquo;t edit?
-              Use the option above to paste its existing redirect URI. Flick sends whatever you put
-              there, which is the only value Reddit will accept for that app.
-            </li>
           </ol>
         ) : null}
       </form>

@@ -52,10 +52,30 @@ export const redditSavedPage = createServerFn({ method: "POST" })
     });
   });
 
-export const redditDemoFeed = createServerFn({ method: "POST" }).handler(async () => {
-  const { fetchDemoFeed } = await import("./reddit.server");
-  return fetchDemoFeed();
-});
+export const redditDemoFeed = createServerFn({ method: "POST" })
+  .validator(
+    z
+      .object({
+        subreddits: z.array(z.string()).optional(),
+      })
+      .optional(),
+  )
+  .handler(async ({ data }) => {
+    const { fetchDemoFeed } = await import("./reddit.server");
+    return fetchDemoFeed(data?.subreddits);
+  });
+
+export const redditUnsave = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      accessToken: z.string().min(8),
+      fullname: z.string().min(3),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const { unsavePost } = await import("./reddit.server");
+    return unsavePost(data);
+  });
 
 /**
  * One-shot lookup of a redgifs clip, used when a slide has no playable file
