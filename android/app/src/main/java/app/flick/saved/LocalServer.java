@@ -329,19 +329,25 @@ public final class LocalServer {
             if (contentRange != null) headers.append("Content-Range: ").append(contentRange).append("\r\n");
             if (etag != null) headers.append("ETag: ").append(etag).append("\r\n");
             if (lastModified != null) headers.append("Last-Modified: ").append(lastModified).append("\r\n");
-            headers.append("Cache-Control: private, max-age=600\r\n");
+            headers.append("Cache-Control: no-store\r\n");
             headers.append("Access-Control-Allow-Origin: *\r\n");
             headers.append("Connection: close\r\n\r\n");
 
             out.write(headers.toString().getBytes(StandardCharsets.US_ASCII));
+            out.flush();
             if (!headOnly && status != 416) {
                 InputStream bodyStream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
                 if (bodyStream != null) {
-                    try (InputStream in = new BufferedInputStream(bodyStream, 65536)) {
-                        byte[] buf = new byte[65536];
+                    try (InputStream in = new BufferedInputStream(bodyStream, 32768)) {
+                        byte[] buf = new byte[32768];
                         int n;
+                        boolean firstChunk = true;
                         while ((n = in.read(buf)) != -1) {
                             out.write(buf, 0, n);
+                            if (firstChunk) {
+                                out.flush();
+                                firstChunk = false;
+                            }
                         }
                     }
                 }
@@ -355,8 +361,8 @@ public final class LocalServer {
     private HttpURLConnection openCdnConnection(String target, String id, String rangeHeader) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(target).openConnection();
         conn.setInstanceFollowRedirects(true);
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(30000);
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(12000);
         conn.setRequestProperty("User-Agent", REDGIFS_UA);
         conn.setRequestProperty("Referer", "https://www.redgifs.com/watch/" + id);
         conn.setRequestProperty("Origin", "https://www.redgifs.com");

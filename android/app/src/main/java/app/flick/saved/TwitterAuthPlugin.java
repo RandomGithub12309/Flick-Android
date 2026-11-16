@@ -173,7 +173,13 @@ public class TwitterAuthPlugin extends Plugin {
             webView.setWebChromeClient(new WebChromeClient() {
                 @Override
                 public void onPermissionRequest(final PermissionRequest request) {
-                    getActivity().runOnUiThread(() -> request.grant(request.getResources()));
+                    getActivity().runOnUiThread(() -> {
+                        try {
+                            request.grant(request.getResources());
+                        } catch (Exception ignored) {
+                            request.deny();
+                        }
+                    });
                 }
             });
             webView.setWebViewClient(new WebViewClient() {
@@ -198,6 +204,15 @@ public class TwitterAuthPlugin extends Plugin {
             dialog.show();
             webView.loadUrl("https://x.com/i/flow/login");
         });
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (backgroundWebView != null) {
+            backgroundWebView.destroy();
+            backgroundWebView = null;
+        }
+        super.handleOnDestroy();
     }
 
     @PluginMethod

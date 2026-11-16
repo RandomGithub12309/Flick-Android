@@ -23,12 +23,13 @@ export async function loadTwitterBookmarks(
   let pagesFetched = 0;
 
   for (let i = 0; i < FAST_START_PAGES; i++) {
+    const prevCursor: string | null = cursor;
     const page = await fetchTwitterBookmarksPage(session, cursor, 40);
     pagesFetched += 1;
     initial.push(...page.posts);
     options?.onCount?.(initial.length);
     cursor = page.cursor;
-    if (!cursor || initial.length >= 25) break;
+    if (!cursor || cursor === prevCursor || initial.length >= 25) break;
   }
 
   if (cursor) {
