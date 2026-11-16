@@ -13,6 +13,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(LocalServerPlugin.class);
+        registerPlugin(TwitterAuthPlugin.class);
         try {
             LocalServer.ensureStarted();
         } catch (IOException ignored) {

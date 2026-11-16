@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, MessageCircle, X } from "lucide-react";
 import { loadPostComments } from "@/lib/reddit/loader";
+import { loadTwitterComments } from "@/lib/twitter/loader";
 import type { FlickPost, RedditComment } from "@/lib/reddit/types";
 import { formatScore } from "@/lib/utils";
 import { useFlick } from "@/store/flick";
@@ -12,15 +13,25 @@ type Props = {
 
 export function CommentsSheet({ post, onClose }: Props) {
   const session = useFlick((s) => s.session);
+  const twitterSession = useFlick((s) => s.twitterSession);
   const [comments, setComments] = useState<RedditComment[]>([]);
   const [loading, setLoading] = useState(true);
+  const isTwitter = post.platform === "twitter";
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void loadPostComments(post.subreddit, post.id, session)
+    const loader = isTwitter
+      ? twitterSession
+        ? loadTwitterComments(twitterSession, post.id)
+        : Promise.resolve([])
+      : loadPostComments(post.subreddit, post.id, session);
+    void loader
       .then((rows) => {
         if (!cancelled) setComments(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setComments([]);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -28,7 +39,7 @@ export function CommentsSheet({ post, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [post.id, post.subreddit, session]);
+  }, [isTwitter, post.id, post.subreddit, session, twitterSession]);
 
   return (
     <div
@@ -68,7 +79,9 @@ export function CommentsSheet({ post, onClose }: Props) {
             comments.map((c) => (
               <div key={c.id} className="space-y-1 border-b border-fg/8 pb-3 last:border-none">
                 <div className="flex items-center justify-between text-xs text-muted">
-                  <span className="font-medium text-fg/90">u/{c.author}</span>
+                  <span className="font-medium text-fg/90">
+                    {isTwitter ? `@${c.author}` : `u/${c.author}`}
+                  </span>
                   <span className="tabular-nums">{formatScore(c.score)}</span>
                 </div>
                 <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg/85 break-words">

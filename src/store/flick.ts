@@ -2,9 +2,11 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { mediaKeyOf, orderDeck } from "@/lib/feed/mix";
 import type { FlickPost, RedditSession, SubredditSort } from "@/lib/reddit/types";
+import type { TwitterSession } from "@/lib/twitter/types";
 
 export type Screen = "home" | "connect" | "loading" | "feed";
-export type FeedSource = "saved" | "demo" | "subreddit";
+export type FeedPlatform = "mix" | "reddit" | "twitter";
+export type FeedSource = "saved" | "demo" | "subreddit" | "twitter" | "twitter-user" | "mix";
 export type MediaFilter = "all" | "video";
 
 export const DEFAULT_SUBREDDITS = [
@@ -18,10 +20,13 @@ export const DEFAULT_SUBREDDITS = [
 type FlickState = {
   ageOk: boolean;
   screen: Screen;
+  feedPlatform: FeedPlatform;
   source: FeedSource;
   activeSubreddit: string | null;
+  activeTwitterUser: string | null;
   subredditSort: SubredditSort;
   session: RedditSession | null;
+  twitterSession: TwitterSession | null;
   redditClientId: string;
   redditRedirectUri: string;
   customSubreddits: string[];
@@ -37,7 +42,9 @@ type FlickState = {
   notice: string | null;
   acceptAge: () => void;
   setScreen: (screen: Screen) => void;
+  setFeedPlatform: (platform: FeedPlatform) => void;
   setSession: (session: RedditSession | null) => void;
+  setTwitterSession: (session: TwitterSession | null) => void;
   setRedditClientId: (clientId: string) => void;
   setRedditRedirectUri: (uri: string) => void;
   setCustomSubreddits: (subs: string[]) => void;
@@ -48,7 +55,12 @@ type FlickState = {
   setError: (error: string | null) => void;
   setNotice: (notice: string | null) => void;
   setLoading: (label: string, count?: number) => void;
-  setPosts: (posts: FlickPost[], source: FeedSource, subreddit?: string | null) => void;
+  setPosts: (
+    posts: FlickPost[],
+    source: FeedSource,
+    subreddit?: string | null,
+    twitterUser?: string | null,
+  ) => void;
   appendPosts: (more: FlickPost[]) => void;
   removePost: (id: string) => void;
   insertPostAt: (post: FlickPost, atIndex: number) => void;
@@ -58,6 +70,7 @@ type FlickState = {
   reroll: () => void;
   toggleMuted: () => void;
   signOut: () => void;
+  signOutTwitter: () => void;
 };
 
 const DECK_CACHE_KEY = "flick.deck.v1";
@@ -67,28 +80,34 @@ type CachedDeck = {
   index: number;
   source: FeedSource;
   activeSubreddit: string | null;
+  activeTwitterUser: string | null;
 };
 
 function readCachedDeck(): CachedDeck {
   try {
     const raw = typeof window !== "undefined" ? window.localStorage.getItem(DECK_CACHE_KEY) : null;
-    if (!raw) return { posts: [], index: 0, source: "demo", activeSubreddit: null };
+    if (!raw) {
+      return { posts: [], index: 0, source: "demo", activeSubreddit: null, activeTwitterUser: null };
+    }
     const parsed = JSON.parse(raw) as Partial<CachedDeck>;
     const posts = Array.isArray(parsed.posts) ? parsed.posts : [];
     const index =
       typeof parsed.index === "number" && posts.length > 0
         ? Math.min(Math.max(0, parsed.index), posts.length - 1)
         : 0;
+    const validSources: FeedSource[] = ["saved", "demo", "subreddit", "twitter", "twitter-user", "mix"];
     const source: FeedSource =
-      parsed.source === "saved" || parsed.source === "subreddit" ? parsed.source : "demo";
+      parsed.source && validSources.includes(parsed.source) ? parsed.source : "demo";
     return {
       posts,
       index,
       source,
       activeSubreddit: typeof parsed.activeSubreddit === "string" ? parsed.activeSubreddit : null,
+      activeTwitterUser:
+        typeof parsed.activeTwitterUser === "string" ? parsed.activeTwitterUser : null,
     };
   } catch {
-    return { posts: [], index: 0, source: "demo", activeSubreddit: null };
+    return { posts: [], index: 0, source: "demo", activeSubreddit: null, activeTwitterUser: null };
   }
 }
 
@@ -106,6 +125,7 @@ function scheduleDeckSave(state: FlickState) {
         index: capped.length > 0 ? Math.min(state.index, capped.length - 1) : 0,
         source: state.source,
         activeSubreddit: state.activeSubreddit,
+        activeTwitterUser: state.activeTwitterUser,
       };
       window.localStorage.setItem(DECK_CACHE_KEY, JSON.stringify(payload));
     } catch {
@@ -120,6 +140,7 @@ export const useFlick = create<FlickState>()(
   persist(
     (set, get) => ({
       ageOk: false,
+      feedPlatform: "mix",
       redditClientId: "",
       redditRedirectUri: "",
       customSubreddits: DEFAULT_SUBREDDITS,
@@ -129,8 +150,10 @@ export const useFlick = create<FlickState>()(
       screen: "home",
       source: initialDeck.source,
       activeSubreddit: initialDeck.activeSubreddit,
+      activeTwitterUser: initialDeck.activeTwitterUser,
       subredditSort: "hot",
       session: null,
+      twitterSession: null,
       posts: initialDeck.posts,
       index: initialDeck.index,
       muted: false,
@@ -140,7 +163,9 @@ export const useFlick = create<FlickState>()(
       notice: null,
       acceptAge: () => set({ ageOk: true }),
       setScreen: (screen) => set({ screen, error: null }),
+      setFeedPlatform: (feedPlatform) => set({ feedPlatform }),
       setSession: (session) => set({ session }),
+      setTwitterSession: (twitterSession) => set({ twitterSession }),
       setRedditClientId: (clientId) => set({ redditClientId: clientId.trim() }),
       setRedditRedirectUri: (uri) => set({ redditRedirectUri: uri.trim() }),
       setCustomSubreddits: (subs) =>
@@ -155,12 +180,13 @@ export const useFlick = create<FlickState>()(
       setNotice: (notice) => set({ notice }),
       setLoading: (label, count = 0) =>
         set({ screen: "loading", loadingLabel: label, loadingCount: count, error: null }),
-      setPosts: (posts, source, subreddit = null) => {
-        const deck = source === "subreddit" ? posts : orderDeck(posts);
+      setPosts: (posts, source, subreddit = null, twitterUser = null) => {
+        const deck = source === "subreddit" || source === "twitter-user" ? posts : orderDeck(posts);
         set({
           posts: deck,
           source,
           activeSubreddit: source === "subreddit" ? subreddit : null,
+          activeTwitterUser: source === "twitter-user" ? twitterUser : null,
           index: 0,
           screen: deck.length > 0 ? "feed" : "home",
           error:
@@ -242,6 +268,19 @@ export const useFlick = create<FlickState>()(
           screen: "home",
           source: "demo",
           activeSubreddit: null,
+          activeTwitterUser: null,
+          error: null,
+          notice: null,
+        }),
+      signOutTwitter: () =>
+        set({
+          twitterSession: null,
+          posts: [],
+          index: 0,
+          screen: "home",
+          source: "demo",
+          activeSubreddit: null,
+          activeTwitterUser: null,
           error: null,
           notice: null,
         }),
@@ -250,7 +289,9 @@ export const useFlick = create<FlickState>()(
       name: "flick.v1",
       partialize: (state) => ({
         ageOk: state.ageOk,
+        feedPlatform: state.feedPlatform,
         session: state.session,
+        twitterSession: state.twitterSession,
         muted: state.muted,
         autoAdvance: state.autoAdvance,
         subredditSort: state.subredditSort,
@@ -269,7 +310,8 @@ useFlick.subscribe((state, prev) => {
     state.posts !== prev.posts ||
     state.index !== prev.index ||
     state.source !== prev.source ||
-    state.activeSubreddit !== prev.activeSubreddit
+    state.activeSubreddit !== prev.activeSubreddit ||
+    state.activeTwitterUser !== prev.activeTwitterUser
   ) {
     scheduleDeckSave(state);
   }

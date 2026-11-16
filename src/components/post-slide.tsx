@@ -23,6 +23,7 @@ type Props = {
   onUnplayable?: () => void;
   onEnded?: () => void;
   onOpenSubreddit?: (subreddit: string) => void;
+  onOpenTwitterUser?: (username: string) => void;
 };
 
 export function PostSlide({
@@ -37,6 +38,7 @@ export function PostSlide({
   onUnplayable,
   onEnded,
   onOpenSubreddit,
+  onOpenTwitterUser,
 }: Props) {
   const [playback, setPlayback] = useState<PlaybackInfo>({
     ratio: null,
@@ -448,12 +450,16 @@ export function PostSlide({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onOpenSubreddit?.(post.subreddit);
+                  if (post.platform === "twitter") {
+                    onOpenTwitterUser?.(post.author);
+                  } else {
+                    onOpenSubreddit?.(post.subreddit);
+                  }
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="rounded-full bg-fg/14 px-2.5 py-1 hover:bg-fg/25 active:scale-95 transition"
               >
-                r/{post.subreddit}
+                {post.platform === "twitter" ? `@${post.author}` : `r/${post.subreddit}`}
               </button>
               {post.nsfw ? (
                 <span className="rounded-full bg-danger/20 px-2.5 py-1 text-danger">NSFW</span>
@@ -463,7 +469,9 @@ export function PostSlide({
             <h2 className="text-base font-semibold leading-snug text-balance text-fg line-clamp-3 [@media(orientation:landscape)_and_(max-height:520px)]:line-clamp-1 [@media(orientation:landscape)_and_(max-height:520px)]:text-sm">
               {post.title}
             </h2>
-            <p className="mt-1 text-xs text-muted">u/{post.author}</p>
+            <p className="mt-1 text-xs text-muted">
+              {post.platform === "twitter" ? "X" : `u/${post.author}`}
+            </p>
           </div>
 
           {tryingToPlay && active ? (

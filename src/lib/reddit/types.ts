@@ -47,6 +47,7 @@ export type FlickVideo = {
 export type FlickPost = {
   id: string;
   name: string;
+  platform?: "reddit" | "twitter";
   title: string;
   subreddit: string;
   author: string;

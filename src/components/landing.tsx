@@ -18,6 +18,9 @@ export function Landing() {
   const acceptAge = useFlick((s) => s.acceptAge);
   const setScreen = useFlick((s) => s.setScreen);
   const session = useFlick((s) => s.session);
+  const twitterSession = useFlick((s) => s.twitterSession);
+  const feedPlatform = useFlick((s) => s.feedPlatform);
+  const setFeedPlatform = useFlick((s) => s.setFeedPlatform);
   const cachedPosts = useFlick((s) => s.posts);
   const error = useFlick((s) => s.error);
   const [busy, setBusy] = useState(false);
@@ -25,7 +28,22 @@ export function Landing() {
   const [standalone, setStandalone] = useState(() => isNative());
   const [update, setUpdate] = useState<AppUpdateInfo | null>(null);
 
-  const primaryLabel = session ? `Shuffle u/${session.username}` : "Try a sample shuffle";
+  const primaryLabel =
+    feedPlatform === "twitter"
+      ? twitterSession
+        ? `Shuffle X @${twitterSession.username || "bookmarks"}`
+        : "Connect X to play"
+      : feedPlatform === "reddit"
+        ? session
+          ? `Shuffle u/${session.username}`
+          : "Try Reddit sample"
+        : twitterSession
+          ? session
+            ? "Shuffle Reddit + X"
+            : "Shuffle sample + X"
+          : session
+            ? `Shuffle u/${session.username}`
+            : "Try a sample shuffle";
 
   useEffect(() => {
     if (isNative()) {
@@ -75,7 +93,7 @@ export function Landing() {
           <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted">18+ player</p>
           <h1 className="mt-3 text-5xl font-semibold tracking-tight text-fg">Flick</h1>
           <p className="mt-4 max-w-sm text-base leading-normal text-muted">
-            Full-screen Reddit saves, shuffled into one deck. Sound on. No blur, no feed filters.
+            Full-screen Reddit &amp; X saves, shuffled into one deck. Sound on. No blur, no feed filters.
           </p>
           <Button size="lg" className="mt-8 w-full" onClick={acceptAge}>
             I am 18 or older
@@ -94,7 +112,7 @@ export function Landing() {
           </p>
           <h1 className="mt-3 text-6xl font-semibold tracking-tight text-fg">Flick</h1>
           <p className="mt-3 max-w-sm text-lg leading-snug text-muted">
-            Your saved Reddit posts in one swipeable, full-screen deck.
+            Your saved Reddit &amp; X posts in one swipeable, full-screen deck.
           </p>
 
           {session ? (
@@ -143,6 +161,33 @@ export function Landing() {
             </Button>
           ) : null}
 
+          <div
+            role="group"
+            aria-label="Deck source"
+            className="grid grid-cols-3 gap-1 rounded-xl bg-surface-2 p-1 shadow-[var(--shadow-border)]"
+          >
+            {(
+              [
+                { id: "mix", label: "Mix" },
+                { id: "reddit", label: "Reddit" },
+                { id: "twitter", label: "X" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setFeedPlatform(opt.id)}
+                className={`rounded-lg py-2 text-xs font-semibold transition ${
+                  feedPlatform === opt.id
+                    ? "bg-fg text-bg"
+                    : "text-muted hover:text-fg"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <SourceChips />
 
           {error ? <p className="text-sm text-danger">{error}</p> : null}
@@ -160,22 +205,33 @@ export function Landing() {
             </Button>
           ) : null}
 
-          <Button size="lg" className="w-full" disabled={busy} onClick={() => void play()}>
+          <Button
+            size="lg"
+            className="w-full"
+            disabled={busy}
+            onClick={() => {
+              if (feedPlatform === "twitter" && !twitterSession) {
+                setScreen("connect");
+                return;
+              }
+              void play();
+            }}
+          >
             {busy ? "Loading…" : primaryLabel}
           </Button>
-          {session ? (
+          {session && feedPlatform !== "twitter" ? (
             <Button
               size="lg"
               variant="secondary"
               className="w-full"
               disabled={busy}
-              onClick={() => void play({ reddit: "demo" })}
+              onClick={() => void play({ platform: "reddit", reddit: "demo" })}
             >
               {busy ? "Loading…" : "Play the sample mix"}
             </Button>
           ) : null}
           <Button size="md" variant="ghost" className="w-full" onClick={() => setScreen("connect")}>
-            {session ? "Reddit & filters" : "Connect Reddit & filters"}
+            Sources &amp; filters
           </Button>
           {installEvent && !standalone ? (
             <Button

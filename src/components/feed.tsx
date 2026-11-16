@@ -6,6 +6,7 @@ import { PostSlide } from "@/components/post-slide";
 import { SubredditSearch } from "@/components/subreddit-search";
 import { refreshDeck } from "@/lib/feed/load";
 import { saveRedditPost, unsaveRedditPost } from "@/lib/reddit/loader";
+import { saveTwitterPost, unsaveTwitterPost } from "@/lib/twitter/loader";
 import type { FlickPost, SubredditSort } from "@/lib/reddit/types";
 import { useFlick } from "@/store/flick";
 
@@ -19,7 +20,14 @@ const MAX_CONSECUTIVE_SKIPS = 8;
 const SKIP_SETTLE_MS = 380;
 const NOTICE_MS = 9000;
 
-function deckLabel(source: string, subreddit: string | null): string {
+function deckLabel(
+  source: string,
+  subreddit: string | null,
+  twitterUser: string | null,
+): string {
+  if (source === "mix") return "Mix";
+  if (source === "twitter") return "X Bookmarks";
+  if (source === "twitter-user" && twitterUser) return `@${twitterUser}`;
   if (source === "saved") return "Saved";
   if (source === "subreddit" && subreddit) return `r/${subreddit}`;
   return "Shuffle";
@@ -32,7 +40,9 @@ export function Feed() {
   const autoAdvance = useFlick((s) => s.autoAdvance);
   const source = useFlick((s) => s.source);
   const activeSubreddit = useFlick((s) => s.activeSubreddit);
+  const activeTwitterUser = useFlick((s) => s.activeTwitterUser);
   const session = useFlick((s) => s.session);
+  const twitterSession = useFlick((s) => s.twitterSession);
   const notice = useFlick((s) => s.notice);
   const setNotice = useFlick((s) => s.setNotice);
   const setAutoAdvance = useFlick((s) => s.setAutoAdvance);
@@ -237,6 +247,14 @@ export function Feed() {
     });
   }, []);
 
+  const openTwitterUser = useCallback((username: string) => {
+    setSearchOpen(false);
+    void refreshDeck({ reddit: "demo", twitterUser: username }).catch((err) => {
+      useFlick.getState().setError(err instanceof Error ? err.message : "Could not load X user.");
+      useFlick.getState().setScreen("home");
+    });
+  }, []);
+
   const handleShare = useCallback(async () => {
     if (!post) return;
     const url = post.permalink;
@@ -301,6 +319,7 @@ export function Feed() {
               if (posts.length > 1) snap(1);
             }}
             onOpenSubreddit={(sub) => openSubreddit(sub)}
+            onOpenTwitterUser={(user) => openTwitterUser(user)}
             onUnplayable={
               offset === 0 && !animating && (item.kind === "video" || Boolean(item.redgifsId))
                 ? () => skipUnplayable(item.id)
@@ -315,7 +334,7 @@ export function Feed() {
           <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-4 pt-safe">
             <div className="pointer-events-auto pt-3">
               <p className="text-xs font-medium uppercase tracking-widest text-fg/80">
-                {deckLabel(source, activeSubreddit)}
+                {deckLabel(source, activeSubreddit, activeTwitterUser)}
               </p>
               <p className="tabular-nums text-sm text-muted">
                 {index + 1} / {posts.length}
@@ -391,7 +410,13 @@ export function Feed() {
                       undoTimer.current = null;
                     }
                     insertPostAt(target.post, target.atIndex);
-                    if (session) {
+                    if (target.post.platform === "twitter") {
+                      if (twitterSession) {
+                        void saveTwitterPost(twitterSession, target.post.id).catch(() => {
+                          setSkipNotice("Could not re-bookmark on X");
+                        });
+                      }
+                    } else if (session) {
                       void saveRedditPost(session, target.post.name).catch(() => {
                         setSkipNotice("Could not re-save on Reddit");
                       });
@@ -407,46 +432,79 @@ export function Feed() {
           <ActionRail
             muted={muted}
             permalink={post.permalink}
-            sourceLabel="Reddit"
+            sourceLabel={post.platform === "twitter" ? "X" : "Reddit"}
             saved={isSavedInFeed}
             onShuffle={reroll}
             onToggleMute={toggleMuted}
             onComments={() => setCommentsOpen(true)}
             onShare={() => void handleShare()}
             onSave={
-              source !== "saved" && session
-                ? () => {
-                    const target = post;
-                    const nextSaved = !isSavedInFeed;
-                    setSavedIds((prevIds) => ({ ...prevIds, [target.id]: nextSaved }));
-                    setSkipNotice(nextSaved ? "Saved to Reddit" : "Removed from Saved");
-                    const op = nextSaved
-                      ? saveRedditPost(session, target.name)
-                      : unsaveRedditPost(session, target.name);
-                    void op.catch(() => {
-                      setSavedIds((prevIds) => ({ ...prevIds, [target.id]: !nextSaved }));
-                      setSkipNotice("Could not update Reddit save");
-                    });
-                  }
-                : undefined
+              post.platform === "twitter"
+                ? source === "twitter-user" && twitterSession
+                  ? () => {
+                      const target = post;
+                      const nextSaved = !isSavedInFeed;
+                      setSavedIds((prevIds) => ({ ...prevIds, [target.id]: nextSaved }));
+                      setSkipNotice(nextSaved ? "Bookmarked on X" : "Removed X bookmark");
+                      const op = nextSaved
+                        ? saveTwitterPost(twitterSession, target.id)
+                        : unsaveTwitterPost(twitterSession, target.id);
+                      void op.catch(() => {
+                        setSavedIds((prevIds) => ({ ...prevIds, [target.id]: !nextSaved }));
+                        setSkipNotice("Could not update X bookmark");
+                      });
+                    }
+                  : undefined
+                : source !== "saved" && source !== "mix" && session
+                  ? () => {
+                      const target = post;
+                      const nextSaved = !isSavedInFeed;
+                      setSavedIds((prevIds) => ({ ...prevIds, [target.id]: nextSaved }));
+                      setSkipNotice(nextSaved ? "Saved to Reddit" : "Removed from Saved");
+                      const op = nextSaved
+                        ? saveRedditPost(session, target.name)
+                        : unsaveRedditPost(session, target.name);
+                      void op.catch(() => {
+                        setSavedIds((prevIds) => ({ ...prevIds, [target.id]: !nextSaved }));
+                        setSkipNotice("Could not update Reddit save");
+                      });
+                    }
+                  : undefined
             }
             onUnsave={
-              source === "saved" && session
-                ? () => {
-                    const target = post;
-                    const atIndex = index;
-                    removePost(target.id);
-                    setUndoUnsave({ post: target, atIndex });
-                    if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
-                    undoTimer.current = window.setTimeout(() => {
-                      undoTimer.current = null;
-                      setUndoUnsave(null);
-                    }, 4500);
-                    void unsaveRedditPost(session, target.name).catch(() => {
-                      setSkipNotice("Could not unsave on Reddit");
-                    });
-                  }
-                : undefined
+              post.platform === "twitter"
+                ? (source === "twitter" || source === "mix") && twitterSession
+                  ? () => {
+                      const target = post;
+                      const atIndex = index;
+                      removePost(target.id);
+                      setUndoUnsave({ post: target, atIndex });
+                      if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+                      undoTimer.current = window.setTimeout(() => {
+                        undoTimer.current = null;
+                        setUndoUnsave(null);
+                      }, 4500);
+                      void unsaveTwitterPost(twitterSession, target.id).catch(() => {
+                        setSkipNotice("Could not remove X bookmark");
+                      });
+                    }
+                  : undefined
+                : (source === "saved" || source === "mix") && session
+                  ? () => {
+                      const target = post;
+                      const atIndex = index;
+                      removePost(target.id);
+                      setUndoUnsave({ post: target, atIndex });
+                      if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+                      undoTimer.current = window.setTimeout(() => {
+                        undoTimer.current = null;
+                        setUndoUnsave(null);
+                      }, 4500);
+                      void unsaveRedditPost(session, target.name).catch(() => {
+                        setSkipNotice("Could not unsave on Reddit");
+                      });
+                    }
+                  : undefined
             }
             onSignOut={source === "saved" ? signOut : undefined}
           />

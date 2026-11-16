@@ -6,6 +6,12 @@ import { Label } from "@/components/ui/label";
 import { refreshDeck } from "@/lib/feed/load";
 import { trackAuthorizePopup } from "@/lib/reddit/authorize-watch";
 import { NATIVE_REDIRECT_URI, isNative, openNativeAuthorize } from "@/lib/reddit/native-oauth";
+import {
+  isNativeTwitterAuthSupported,
+  loginTwitterNative,
+  logoutTwitterNative,
+} from "@/lib/twitter/native-auth";
+import { parseTwitterCookies } from "@/lib/twitter/parse";
 import { DEFAULT_SUBREDDITS, useFlick } from "@/store/flick";
 
 function redirectUri(): string {
@@ -26,6 +32,11 @@ export function ConnectForm() {
   const error = useFlick((s) => s.error);
   const session = useFlick((s) => s.session);
   const signOut = useFlick((s) => s.signOut);
+  const twitterSession = useFlick((s) => s.twitterSession);
+  const setTwitterSession = useFlick((s) => s.setTwitterSession);
+  const signOutTwitter = useFlick((s) => s.signOutTwitter);
+  const feedPlatform = useFlick((s) => s.feedPlatform);
+  const setFeedPlatform = useFlick((s) => s.setFeedPlatform);
   const savedClientId = useFlick((s) => s.redditClientId);
   const setSavedClientId = useFlick((s) => s.setRedditClientId);
   const customSubreddits = useFlick((s) => s.customSubreddits);
@@ -38,6 +49,11 @@ export function ConnectForm() {
   const [clientId, setClientId] = useState(() => savedClientId);
   const [subsInput, setSubsInput] = useState(() => customSubreddits.join(", "));
   const [busy, setBusy] = useState(false);
+  const [twitterBusy, setTwitterBusy] = useState(false);
+  const [showManualX, setShowManualX] = useState(() => !isNativeTwitterAuthSupported());
+  const [xAuthInput, setXAuthInput] = useState("");
+  const [xCt0Input, setXCt0Input] = useState("");
+  const [xHandleInput, setXHandleInput] = useState("");
   const [help, setHelp] = useState(() => isNative() && !savedClientId);
   const override = useFlick((s) => s.redditRedirectUri);
   const setOverride = useFlick((s) => s.setRedditRedirectUri);
@@ -97,13 +113,50 @@ export function ConnectForm() {
     setBusy(true);
     setError(null);
     try {
-      await refreshDeck({ reddit: "demo" });
+      await refreshDeck({ platform: "reddit", reddit: "demo" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Demo feed failed.");
       setScreen("connect");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function connectTwitterWebView() {
+    setTwitterBusy(true);
+    setError(null);
+    try {
+      const res = await loginTwitterNative();
+      setTwitterSession({
+        authToken: res.authToken,
+        ct0: res.ct0,
+        username: res.screenName?.trim() || "x",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "X sign-in failed.";
+      if (!msg.toLowerCase().includes("cancel")) {
+        setError(msg);
+      }
+    } finally {
+      setTwitterBusy(false);
+    }
+  }
+
+  function saveManualTwitter(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const parsed = parseTwitterCookies(xAuthInput, xCt0Input);
+    if (!parsed) {
+      setError("Enter both auth_token and ct0 (or paste a Cookie header containing both).");
+      return;
+    }
+    setTwitterSession({
+      authToken: parsed.authToken,
+      ct0: parsed.ct0,
+      username: xHandleInput.replace(/^@/, "").trim() || "x",
+    });
+    setXAuthInput("");
+    setXCt0Input("");
   }
 
   return (
@@ -119,27 +172,70 @@ export function ConnectForm() {
           <ArrowLeft className="size-5" />
         </Button>
         <div>
-          <h1 className="text-lg font-semibold">Reddit &amp; Filters</h1>
+          <h1 className="text-lg font-semibold">Sources &amp; Filters</h1>
           <p className="text-sm text-muted">
-            {session ? `Signed in as u/${session.username}` : "Connect your saved posts or customize subreddits."}
+            Connect Reddit or X bookmarks, or mix both into one deck.
           </p>
         </div>
       </header>
 
-      {session ? (
-        <div className="mb-6 flex items-center justify-between rounded-xl bg-surface-2 px-4 py-3 shadow-[var(--shadow-border)]">
-          <div>
-            <p className="text-sm font-medium text-fg">u/{session.username}</p>
-            <p className="text-xs text-muted">Connected</p>
-          </div>
-          <Button variant="ghost" size="sm" onClick={signOut}>
-            Sign out
-          </Button>
+      {session || twitterSession ? (
+        <div className="mb-6 flex flex-col gap-2">
+          {session ? (
+            <div className="flex items-center justify-between rounded-xl bg-surface-2 px-4 py-3 shadow-[var(--shadow-border)]">
+              <div>
+                <p className="text-sm font-medium text-fg">Reddit · u/{session.username}</p>
+                <p className="text-xs text-muted">Connected</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={signOut}>
+                Sign out
+              </Button>
+            </div>
+          ) : null}
+          {twitterSession ? (
+            <div className="flex items-center justify-between rounded-xl bg-surface-2 px-4 py-3 shadow-[var(--shadow-border)]">
+              <div>
+                <p className="text-sm font-medium text-fg">
+                  X · @{twitterSession.username || "connected"}
+                </p>
+                <p className="text-xs text-muted">Bookmarks connected</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  signOutTwitter();
+                  void logoutTwitterNative();
+                }}
+              >
+                Sign out
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
       <section className="mb-6 flex flex-col gap-3 rounded-xl bg-surface-2 p-4 shadow-[var(--shadow-border)]">
         <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-muted">Deck filters</h2>
+        <div className="grid grid-cols-3 gap-2">
+          {(
+            [
+              { id: "mix", label: "Mix" },
+              { id: "reddit", label: "Reddit" },
+              { id: "twitter", label: "X" },
+            ] as const
+          ).map((opt) => (
+            <Button
+              key={opt.id}
+              type="button"
+              size="sm"
+              variant={feedPlatform === opt.id ? "primary" : "ghost"}
+              onClick={() => setFeedPlatform(opt.id)}
+            >
+              {opt.label}
+            </Button>
+          ))}
+        </div>
         <div className="flex gap-2">
           <Button
             type="button"
@@ -170,6 +266,78 @@ export function ConnectForm() {
           <span>NSFW posts</span>
           <span className="text-xs text-muted">{showNsfw ? "Shown" : "Hidden"}</span>
         </Button>
+      </section>
+
+      <section className="mb-6 flex flex-col gap-3 rounded-xl bg-surface-2 p-4 shadow-[var(--shadow-border)]">
+        <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-muted">
+          X (Twitter) bookmarks
+        </h2>
+        {isNativeTwitterAuthSupported() ? (
+          <Button
+            type="button"
+            size="lg"
+            className="w-full"
+            disabled={twitterBusy}
+            onClick={() => void connectTwitterWebView()}
+          >
+            {twitterBusy
+              ? "Waiting for X sign-in…"
+              : twitterSession
+                ? "Reconnect X in WebView"
+                : "Sign in with X"}
+          </Button>
+        ) : null}
+        <button
+          type="button"
+          className="self-start text-left text-xs text-muted underline-offset-4 hover:underline"
+          onClick={() => setShowManualX((v) => !v)}
+        >
+          {showManualX ? "Hide manual cookie entry" : "Paste session cookies manually"}
+        </button>
+        {showManualX ? (
+          <form className="flex flex-col gap-3" onSubmit={saveManualTwitter}>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="x-auth">auth_token (or full Cookie header)</Label>
+              <Input
+                id="x-auth"
+                value={xAuthInput}
+                onChange={(e) => setXAuthInput(e.target.value)}
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder="Paste auth_token or auth_token=...; ct0=..."
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="x-ct0">ct0 (optional if included above)</Label>
+              <Input
+                id="x-ct0"
+                value={xCt0Input}
+                onChange={(e) => setXCt0Input(e.target.value)}
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder="Paste ct0 CSRF token"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="x-handle">Your @handle (optional)</Label>
+              <Input
+                id="x-handle"
+                value={xHandleInput}
+                onChange={(e) => setXHandleInput(e.target.value)}
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder="username"
+              />
+            </div>
+            <Button type="submit" size="md" variant="secondary" className="w-full">
+              Save X session
+            </Button>
+          </form>
+        ) : null}
+        <p className="text-xs leading-normal text-subtle">
+          Uses your own logged-in X web session on this device to fetch your bookmarks directly — no
+          paid X API key required.
+        </p>
       </section>
 
       <section className="mb-6 flex flex-col gap-2">
