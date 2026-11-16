@@ -296,6 +296,9 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     };
 
     const onTime = () => {
+      if (el.readyState >= 3 || !el.paused) {
+        setBuffering(false);
+      }
       syncAudio();
       publish();
     };
@@ -313,6 +316,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       on("playing", onPlaying),
       on("waiting", onWaiting),
       on("canplay", onCanPlay),
+      on("canplaythrough", onCanPlay),
       on("timeupdate", onTime),
       on("progress", publish),
       on("durationchange", publish),
@@ -432,6 +436,49 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [active, muted]);
 
+  // Recover if the active stream stalls with no time progress for 5 seconds.
+  useEffect(() => {
+    if (!active || paused || blocked) return;
+    const el = videoRef.current;
+    if (!el) return;
+    let lastTime = el.currentTime;
+    let stalledTicks = 0;
+    let retriedLoad = false;
+
+    const id = window.setInterval(() => {
+      if (!activeRef.current || userPausedRef.current || blockedRef.current) return;
+      if (el.paused || el.ended) {
+        stalledTicks = 0;
+        lastTime = el.currentTime;
+        return;
+      }
+      if (Math.abs(el.currentTime - lastTime) > 0.05) {
+        lastTime = el.currentTime;
+        stalledTicks = 0;
+        setBuffering(false);
+        return;
+      }
+      stalledTicks += 1;
+      if (stalledTicks >= 5) {
+        stalledTicks = 0;
+        if (advanceSource()) return;
+        if (!retriedLoad) {
+          retriedLoad = true;
+          const resumeAt = el.currentTime;
+          try {
+            el.load();
+            if (resumeAt > 0.2) el.currentTime = resumeAt;
+            void el.play().catch(() => undefined);
+          } catch {
+            // Ignore reload errors
+          }
+        }
+      }
+    }, 1000);
+
+    return () => window.clearInterval(id);
+  }, [active, advanceSource, blocked, paused, source]);
+
   useEffect(() => {
     if (!active) {
       clearStartTimer();
@@ -447,7 +494,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     }, START_GRACE_MS);
 
     return () => clearStartTimer();
-  }, [active, advanceSource, clearStartTimer, reportUnplayable, video.url]);
+  }, [active, advanceSource, clearStartTimer, reportUnplayable, source, video.url]);
 
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
@@ -468,7 +515,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         loop={!autoAdvance}
         autoPlay={active}
         muted={muted}
-        preload={active || preload ? "auto" : "metadata"}
+        preload={active ? "auto" : preload ? "metadata" : "none"}
         className="absolute inset-0 size-full bg-black object-contain"
       />
       {buffering && active && !paused && !blocked ? (

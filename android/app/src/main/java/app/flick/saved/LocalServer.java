@@ -183,19 +183,39 @@ public final class LocalServer {
     private void proxyTwitterVideo(String target, String rangeHeader, boolean headOnly, OutputStream out) throws IOException {
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) new URL(target).openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(30000);
-            conn.setRequestProperty("User-Agent", REDGIFS_UA);
-            conn.setRequestProperty("Referer", "https://x.com/");
-            conn.setRequestProperty("Origin", "https://x.com");
-            if (rangeHeader != null && !rangeHeader.isEmpty()) {
-                conn.setRequestProperty("Range", rangeHeader);
+            int status = 0;
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try {
+                    conn = (HttpURLConnection) new URL(target).openConnection();
+                    conn.setInstanceFollowRedirects(true);
+                    conn.setConnectTimeout(8000);
+                    conn.setReadTimeout(12000);
+                    conn.setRequestProperty("User-Agent", REDGIFS_UA);
+                    conn.setRequestProperty("Referer", "https://x.com/");
+                    conn.setRequestProperty("Origin", "https://x.com");
+                    if (rangeHeader != null && !rangeHeader.isEmpty()) {
+                        conn.setRequestProperty("Range", rangeHeader);
+                    }
+                    status = conn.getResponseCode();
+                    if (status == 200 || status == 206 || status == 416) {
+                        break;
+                    }
+                } catch (IOException e) {
+                    if (attempt == 1) throw e;
+                }
+                if (conn != null) {
+                    conn.disconnect();
+                    conn = null;
+                }
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
 
-            int status = conn.getResponseCode();
-            if (status != 200 && status != 206 && status != 416) {
+            if (conn == null || (status != 200 && status != 206 && status != 416)) {
                 sendJsonError(out, 502, "twitter upstream " + status);
                 return;
             }
@@ -222,14 +242,20 @@ public final class LocalServer {
             headers.append("Connection: close\r\n\r\n");
 
             out.write(headers.toString().getBytes(StandardCharsets.US_ASCII));
+            out.flush();
             if (!headOnly && status != 416) {
                 InputStream bodyStream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
                 if (bodyStream != null) {
-                    try (InputStream in = new BufferedInputStream(bodyStream, 65536)) {
-                        byte[] buf = new byte[65536];
+                    try (InputStream in = new BufferedInputStream(bodyStream, 32768)) {
+                        byte[] buf = new byte[32768];
                         int n;
+                        boolean firstChunk = true;
                         while ((n = in.read(buf)) != -1) {
                             out.write(buf, 0, n);
+                            if (firstChunk) {
+                                out.flush();
+                                firstChunk = false;
+                            }
                         }
                     }
                 }
