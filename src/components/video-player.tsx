@@ -280,6 +280,19 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
 
     const onCanPlay = () => {
       setBuffering(false);
+      if (activeRef.current && !userPausedRef.current && !blockedRef.current && el.paused) {
+        void el.play().then(
+          () => {
+            if (audio && !el.muted) void audio.play().catch(() => undefined);
+          },
+          (err: unknown) => {
+            if ((err as { name?: string } | null)?.name === "NotAllowedError") {
+              blockedRef.current = true;
+              setBlocked(true);
+            }
+          },
+        );
+      }
     };
 
     const onTime = () => {

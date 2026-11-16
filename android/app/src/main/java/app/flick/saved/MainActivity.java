@@ -4,6 +4,7 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Window;
 import android.view.WindowManager;
+import android.webkit.WebSettings;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -19,6 +20,11 @@ public class MainActivity extends BridgeActivity {
         } catch (IOException ignored) {
         }
         super.onCreate(savedInstanceState);
+
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            WebSettings webSettings = getBridge().getWebView().getSettings();
+            webSettings.setMediaPlaybackRequiresUserGesture(false);
+        }
 
         Window window = getWindow();
         if (window != null) {
