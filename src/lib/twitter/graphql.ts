@@ -1,4 +1,5 @@
-import { CapacitorHttp } from "@capacitor/core";
+import { Capacitor, CapacitorHttp } from "@capacitor/core";
+import { fetchViaTwitterWebView } from "./native-auth";
 
 /** Public X web-client bearer token used by x.com in the browser. */
 export const X_WEB_BEARER =
@@ -89,13 +90,57 @@ export function invalidateQueryIdsCache() {
 }
 
 async function fetchText(url: string): Promise<string> {
-  const res = await CapacitorHttp.request({
-    url,
-    method: "GET",
-    headers: { "User-Agent": X_WEB_UA },
-  });
-  if (res.status < 200 || res.status >= 300) return "";
-  return typeof res.data === "string" ? res.data : JSON.stringify(res.data ?? "");
+  try {
+    const res = await CapacitorHttp.request({
+      url,
+      method: "GET",
+      headers: { "User-Agent": X_WEB_UA },
+    });
+    if (res.status >= 200 && res.status < 300) {
+      return typeof res.data === "string" ? res.data : JSON.stringify(res.data ?? "");
+    }
+  } catch {
+    // Fall through to WebView fallback on native
+  }
+
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const wv = await fetchViaTwitterWebView({
+        url,
+        method: "GET",
+        headers: { "User-Agent": X_WEB_UA },
+      });
+      if (wv.status >= 200 && wv.status < 300 && wv.body) {
+        return wv.body;
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  return "";
+}
+
+function extractQueryIdsFromJs(
+  js: string,
+  targetOps: Set<string>,
+  found: Partial<Record<TwitterOperation, string>>,
+) {
+  const forward =
+    /queryId\s*:\s*["']([A-Za-z0-9_-]+)["']\s*,\s*operationName\s*:\s*["']([A-Za-z0-9_]+)["']/g;
+  for (const m of js.matchAll(forward)) {
+    const [, qid, op] = m;
+    if (qid && op && targetOps.has(op)) {
+      found[op as TwitterOperation] = qid;
+    }
+  }
+  const reverse =
+    /operationName\s*:\s*["']([A-Za-z0-9_]+)["']\s*,\s*queryId\s*:\s*["']([A-Za-z0-9_-]+)["']/g;
+  for (const m of js.matchAll(reverse)) {
+    const [, op, qid] = m;
+    if (qid && op && targetOps.has(op)) {
+      found[op as TwitterOperation] = qid;
+    }
+  }
 }
 
 let refreshPromise: Promise<Partial<Record<TwitterOperation, string>>> | null = null;
@@ -114,26 +159,33 @@ export async function resolveQueryIds(forceRefresh = false): Promise<Record<Twit
     refreshPromise = (async () => {
       const found: Partial<Record<TwitterOperation, string>> = {};
       try {
-        const html = await fetchText("https://x.com/i/bookmarks");
-        const bundleUrls = Array.from(
+        const html = (await fetchText("https://x.com/i/bookmarks")) || (await fetchText("https://x.com/home"));
+        if (!html) return found;
+
+        const scriptUrls = Array.from(
           html.matchAll(/https:\/\/abs\.twimg\.com\/responsive-web\/client-web[^"'\s]+\.js/g),
           (m) => m[0],
-        ).slice(0, 8);
+        ).filter((u) => !u.includes("/i18n/"));
 
+        // Also discover lazy chunk bundles (e.g. bundle.Bookmarks.<hash>a.js) from inline chunk map
+        const chunkMapRegex = /"((?:bundle\.)?(?:Bookmarks|UserProfile|Explore)|api|shared~[^"]+)":"([a-f0-9]+)"/g;
+        for (const m of html.matchAll(chunkMapRegex)) {
+          const [, chunkName, chunkHash] = m;
+          if (chunkName && chunkHash) {
+            scriptUrls.push(
+              `https://abs.twimg.com/responsive-web/client-web/${chunkName}.${chunkHash}a.js`,
+            );
+          }
+        }
+
+        const uniqueUrls = Array.from(new Set(scriptUrls)).slice(0, 16);
         const targetOps = new Set<string>(Object.keys(FALLBACK_QUERY_IDS));
-        const opRegex = /queryId:"([A-Za-z0-9_-]+)",operationName:"([A-Za-z0-9_]+)"/g;
 
         await Promise.all(
-          bundleUrls.map(async (jsUrl) => {
+          uniqueUrls.map(async (jsUrl) => {
             const js = await fetchText(jsUrl).catch(() => "");
             if (!js) return;
-            for (const match of js.matchAll(opRegex)) {
-              const qid = match[1];
-              const op = match[2];
-              if (qid && op && targetOps.has(op)) {
-                found[op as TwitterOperation] = qid;
-              }
-            }
+            extractQueryIdsFromJs(js, targetOps, found);
           }),
         );
 

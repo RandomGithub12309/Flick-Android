@@ -79,19 +79,27 @@ async function gqlRequest(
 
   const headers = buildHeaders(session, method === "POST");
 
-  const res = await CapacitorHttp.request({
-    url,
-    method,
-    headers,
-    data: bodyStr,
-  });
+  let resStatus = 0;
+  let resData: unknown = null;
+  try {
+    const res = await CapacitorHttp.request({
+      url,
+      method,
+      headers,
+      data: bodyStr,
+    });
+    resStatus = res.status;
+    resData = res.data;
+  } catch {
+    resStatus = 0;
+  }
 
-  if ((res.status === 404 || res.status === 403) && !retried) {
+  if ((resStatus === 404 || resStatus === 403 || resStatus === 0) && !retried) {
     invalidateQueryIdsCache();
     return gqlRequest(session, operation, options, true);
   }
 
-  if ((res.status === 404 || res.status === 403) && Capacitor.isNativePlatform()) {
+  if ((resStatus === 404 || resStatus === 403 || resStatus === 0) && Capacitor.isNativePlatform()) {
     const wv = await fetchViaTwitterWebView({
       url,
       method,
@@ -109,18 +117,26 @@ async function gqlRequest(
         "X rejected the request (403) — make sure both auth_token and ct0 are current and from the same signed-in x.com session.",
       );
     }
-    throw new Error(`X request failed (${wv.status || res.status}).`);
+    const errBody = parseJson(wv.body);
+    const errMsg = Array.isArray(errBody.errors)
+      ? (errBody.errors[0] as Record<string, unknown> | undefined)?.message
+      : undefined;
+    throw new Error(
+      typeof errMsg === "string" && errMsg
+        ? `X request failed (${wv.status || resStatus}): ${errMsg}`
+        : `X request failed (${wv.status || resStatus}).`,
+    );
   }
 
-  if (res.status === 401) {
+  if (resStatus === 401) {
     throw new Error("X session expired — sign in to X again.");
   }
 
-  if (res.status < 200 || res.status >= 300) {
-    throw new Error(`X request failed (${res.status}).`);
+  if (resStatus < 200 || resStatus >= 300) {
+    throw new Error(`X request failed (${resStatus}).`);
   }
 
-  return parseJson(res.data);
+  return parseJson(resData);
 }
 
 export async function fetchTwitterBookmarksPage(
