@@ -48,13 +48,17 @@ export function Feed() {
   const [controlsVisible, setControlsVisible] = useState(true);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [drag, setDrag] = useState(0);
   const [animating, setAnimating] = useState(false);
   const [skipNotice, setSkipNotice] = useState<string | null>(null);
   const [undoUnsave, setUndoUnsave] = useState<{ post: FlickPost; atIndex: number } | null>(null);
+  const [savedIds, setSavedIds] = useState<Record<string, boolean>>({});
 
+  const trackRef = useRef<HTMLDivElement>(null);
+  const rafRef = useRef<number | null>(null);
+  const pendingDrag = useRef(0);
   const noticeTimer = useRef<number | null>(null);
   const undoTimer = useRef<number | null>(null);
+  const snapTimer = useRef<number | null>(null);
   const startY = useRef<number | null>(null);
   const lastY = useRef(0);
   const locked = useRef(false);
@@ -63,41 +67,63 @@ export function Feed() {
 
   const post = posts[index];
 
+  const applyTrackTransform = useCallback((y: number, animate: boolean) => {
+    const el = trackRef.current;
+    if (!el) return;
+    el.style.transition = animate ? "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)" : "none";
+    el.style.transform = `translate3d(0, ${y}px, 0)`;
+  }, []);
+
   const snap = useCallback(
     (dir: -1 | 0 | 1, auto = false, pruneId?: string) => {
       if (!auto) skips.current = 0;
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (snapTimer.current !== null) {
+        window.clearTimeout(snapTimer.current);
+        snapTimer.current = null;
+      }
       setAnimating(true);
       if (dir === 1) {
-        setDrag(-window.innerHeight);
-        window.setTimeout(() => {
+        applyTrackTransform(-window.innerHeight, true);
+        snapTimer.current = window.setTimeout(() => {
+          snapTimer.current = null;
+          applyTrackTransform(0, false);
           if (pruneId) {
             removePost(pruneId);
           } else {
             next();
           }
           setAnimating(false);
-          setDrag(0);
-        }, 240);
+        }, 220);
       } else if (dir === -1) {
-        setDrag(window.innerHeight);
-        window.setTimeout(() => {
+        applyTrackTransform(window.innerHeight, true);
+        snapTimer.current = window.setTimeout(() => {
+          snapTimer.current = null;
+          applyTrackTransform(0, false);
           prev();
           setAnimating(false);
-          setDrag(0);
-        }, 240);
+        }, 220);
       } else {
-        setDrag(0);
-        window.setTimeout(() => setAnimating(false), 180);
+        applyTrackTransform(0, true);
+        snapTimer.current = window.setTimeout(() => {
+          snapTimer.current = null;
+          setAnimating(false);
+        }, 180);
       }
       if (dir !== 0 && navigator.vibrate) navigator.vibrate(8);
     },
-    [next, prev, removePost],
+    [applyTrackTransform, next, prev, removePost],
   );
 
   useEffect(() => {
     return () => {
       if (skipTimer.current !== null) window.clearTimeout(skipTimer.current);
       if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+      if (snapTimer.current !== null) window.clearTimeout(snapTimer.current);
+      if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
     };
   }, []);
 
@@ -180,12 +206,19 @@ export function Feed() {
     if (animating || searchOpen || commentsOpen) return;
     startY.current = e.clientY;
     lastY.current = e.clientY;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent) => {
     if (startY.current == null) return;
     lastY.current = e.clientY;
-    setDrag(e.clientY - startY.current);
+    pendingDrag.current = e.clientY - startY.current;
+    if (rafRef.current === null) {
+      rafRef.current = window.requestAnimationFrame(() => {
+        rafRef.current = null;
+        if (startY.current != null) {
+          applyTrackTransform(pendingDrag.current, false);
+        }
+      });
+    }
   };
   const onPointerUp = () => {
     if (startY.current == null) return;
@@ -193,7 +226,7 @@ export function Feed() {
     startY.current = null;
     if (dy < -THRESHOLD) snap(1);
     else if (dy > THRESHOLD) snap(-1);
-    else snap(0);
+    else if (Math.abs(dy) > 4) snap(0);
   };
 
   const openSubreddit = useCallback((subreddit: string, sort?: SubredditSort) => {
@@ -238,9 +271,11 @@ export function Feed() {
       const item = posts[i];
       if (!item) return null;
       if (offset !== 0 && posts.length < 2) return null;
-      return { offset, item, i };
+      return { offset, item };
     })
-    .filter((v): v is { offset: number; item: typeof post; i: number } => v !== null);
+    .filter((v): v is { offset: number; item: typeof post } => v !== null);
+
+  const isSavedInFeed = Boolean(savedIds[post.id]);
 
   return (
     <section
@@ -250,29 +285,30 @@ export function Feed() {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
-      {around.map(({ offset, item, i }) => (
-        <PostSlide
-          key={`${item.id}-${i === index ? "a" : offset}`}
-          post={item}
-          active={offset === 0 && !animating && !commentsOpen && !searchOpen}
-          preload={offset === 1}
-          muted={muted}
-          autoAdvance={autoAdvance}
-          offset={offset}
-          drag={drag}
-          animating={animating || startY.current != null}
-          uiVisible={controlsVisible}
-          onEnded={() => {
-            if (posts.length > 1) snap(1);
-          }}
-          onOpenSubreddit={(sub) => openSubreddit(sub)}
-          onUnplayable={
-            offset === 0 && !animating && (item.kind === "video" || Boolean(item.redgifsId))
-              ? () => skipUnplayable(item.id)
-              : undefined
-          }
-        />
-      ))}
+      <div ref={trackRef} className="relative h-full w-full" style={{ willChange: "transform" }}>
+        {around.map(({ offset, item }) => (
+          <PostSlide
+            key={posts.length >= 3 ? item.id : `${item.id}-${offset}`}
+            post={item}
+            active={offset === 0 && !animating && !commentsOpen && !searchOpen}
+            preload={offset === 1}
+            muted={muted}
+            autoAdvance={autoAdvance}
+            offset={offset}
+            animating={animating}
+            uiVisible={controlsVisible}
+            onEnded={() => {
+              if (posts.length > 1) snap(1);
+            }}
+            onOpenSubreddit={(sub) => openSubreddit(sub)}
+            onUnplayable={
+              offset === 0 && !animating && (item.kind === "video" || Boolean(item.redgifsId))
+                ? () => skipUnplayable(item.id)
+                : undefined
+            }
+          />
+        ))}
+      </div>
 
       {controlsVisible ? (
         <>
@@ -372,10 +408,28 @@ export function Feed() {
             muted={muted}
             permalink={post.permalink}
             sourceLabel="Reddit"
+            saved={isSavedInFeed}
             onShuffle={reroll}
             onToggleMute={toggleMuted}
             onComments={() => setCommentsOpen(true)}
             onShare={() => void handleShare()}
+            onSave={
+              source !== "saved" && session
+                ? () => {
+                    const target = post;
+                    const nextSaved = !isSavedInFeed;
+                    setSavedIds((prevIds) => ({ ...prevIds, [target.id]: nextSaved }));
+                    setSkipNotice(nextSaved ? "Saved to Reddit" : "Removed from Saved");
+                    const op = nextSaved
+                      ? saveRedditPost(session, target.name)
+                      : unsaveRedditPost(session, target.name);
+                    void op.catch(() => {
+                      setSavedIds((prevIds) => ({ ...prevIds, [target.id]: !nextSaved }));
+                      setSkipNotice("Could not update Reddit save");
+                    });
+                  }
+                : undefined
+            }
             onUnsave={
               source === "saved" && session
                 ? () => {

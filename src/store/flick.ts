@@ -60,6 +60,62 @@ type FlickState = {
   signOut: () => void;
 };
 
+const DECK_CACHE_KEY = "flick.deck.v1";
+
+type CachedDeck = {
+  posts: FlickPost[];
+  index: number;
+  source: FeedSource;
+  activeSubreddit: string | null;
+};
+
+function readCachedDeck(): CachedDeck {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(DECK_CACHE_KEY) : null;
+    if (!raw) return { posts: [], index: 0, source: "demo", activeSubreddit: null };
+    const parsed = JSON.parse(raw) as Partial<CachedDeck>;
+    const posts = Array.isArray(parsed.posts) ? parsed.posts : [];
+    const index =
+      typeof parsed.index === "number" && posts.length > 0
+        ? Math.min(Math.max(0, parsed.index), posts.length - 1)
+        : 0;
+    const source: FeedSource =
+      parsed.source === "saved" || parsed.source === "subreddit" ? parsed.source : "demo";
+    return {
+      posts,
+      index,
+      source,
+      activeSubreddit: typeof parsed.activeSubreddit === "string" ? parsed.activeSubreddit : null,
+    };
+  } catch {
+    return { posts: [], index: 0, source: "demo", activeSubreddit: null };
+  }
+}
+
+let deckSaveTimer: number | null = null;
+
+function scheduleDeckSave(state: FlickState) {
+  if (typeof window === "undefined") return;
+  if (deckSaveTimer !== null) window.clearTimeout(deckSaveTimer);
+  deckSaveTimer = window.setTimeout(() => {
+    deckSaveTimer = null;
+    try {
+      const capped = state.posts.slice(0, 60);
+      const payload: CachedDeck = {
+        posts: capped,
+        index: capped.length > 0 ? Math.min(state.index, capped.length - 1) : 0,
+        source: state.source,
+        activeSubreddit: state.activeSubreddit,
+      };
+      window.localStorage.setItem(DECK_CACHE_KEY, JSON.stringify(payload));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, 800);
+}
+
+const initialDeck = readCachedDeck();
+
 export const useFlick = create<FlickState>()(
   persist(
     (set, get) => ({
@@ -71,12 +127,12 @@ export const useFlick = create<FlickState>()(
       showNsfw: true,
       autoAdvance: false,
       screen: "home",
-      source: "demo",
-      activeSubreddit: null,
+      source: initialDeck.source,
+      activeSubreddit: initialDeck.activeSubreddit,
       subredditSort: "hot",
       session: null,
-      posts: [],
-      index: 0,
+      posts: initialDeck.posts,
+      index: initialDeck.index,
       muted: false,
       loadingLabel: "",
       loadingCount: 0,
@@ -203,12 +259,18 @@ export const useFlick = create<FlickState>()(
         customSubreddits: state.customSubreddits,
         mediaFilter: state.mediaFilter,
         showNsfw: state.showNsfw,
-        // Instant resume: cache up to 80 posts and current index.
-        posts: state.posts.slice(0, 80),
-        index: Math.min(state.index, Math.max(0, Math.min(state.posts.length, 80) - 1)),
-        source: state.source,
-        activeSubreddit: state.activeSubreddit,
       }),
     },
   ),
 );
+
+useFlick.subscribe((state, prev) => {
+  if (
+    state.posts !== prev.posts ||
+    state.index !== prev.index ||
+    state.source !== prev.source ||
+    state.activeSubreddit !== prev.activeSubreddit
+  ) {
+    scheduleDeckSave(state);
+  }
+});

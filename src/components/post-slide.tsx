@@ -18,7 +18,6 @@ type Props = {
   muted: boolean;
   autoAdvance?: boolean;
   offset: number;
-  drag: number;
   animating: boolean;
   uiVisible: boolean;
   onUnplayable?: () => void;
@@ -33,7 +32,6 @@ export function PostSlide({
   muted,
   autoAdvance = false,
   offset,
-  drag,
   animating,
   uiVisible,
   onUnplayable,
@@ -57,6 +55,7 @@ export function PostSlide({
   const lookedUp = useRef(false);
   const holdTimer = useRef<number | null>(null);
   const heldLong = useRef(false);
+  const downPos = useRef<{ x: number; y: number } | null>(null);
   const lastTap = useRef<{ at: number; x: number } | null>(null);
   const tapTimer = useRef<number | null>(null);
   const feedbackTimer = useRef<number | null>(null);
@@ -72,18 +71,42 @@ export function PostSlide({
 
   const tryingToPlay = Boolean(video);
 
-  useEffect(() => {
-    if (!active) return;
-    retries.current = 0;
-  }, [active]);
+  const clearHold = useCallback(() => {
+    if (holdTimer.current !== null) {
+      window.clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+    downPos.current = null;
+    setSpeed2x(false);
+    videoRef.current?.setPlaybackRate(1);
+  }, []);
 
   useEffect(() => {
+    if (!active) {
+      clearHold();
+      return;
+    }
+    retries.current = 0;
+  }, [active, clearHold]);
+
+  useEffect(() => {
+    const onRelease = () => {
+      if (holdTimer.current !== null || heldLong.current) {
+        clearHold();
+      }
+    };
+    window.addEventListener("pointerup", onRelease, true);
+    window.addEventListener("pointercancel", onRelease, true);
+    window.addEventListener("blur", onRelease);
     return () => {
+      window.removeEventListener("pointerup", onRelease, true);
+      window.removeEventListener("pointercancel", onRelease, true);
+      window.removeEventListener("blur", onRelease);
       if (holdTimer.current !== null) window.clearTimeout(holdTimer.current);
       if (tapTimer.current !== null) window.clearTimeout(tapTimer.current);
       if (feedbackTimer.current !== null) window.clearTimeout(feedbackTimer.current);
     };
-  }, []);
+  }, [clearHold]);
 
   // Pre-resolve Redgifs clips for both the active slide and the upcoming next slide.
   useEffect(() => {
@@ -160,6 +183,7 @@ export function PostSlide({
     const target = e.target as HTMLElement;
     if (target.closest("button, a, [role='slider']")) return;
     swipeX.current = e.clientX;
+    downPos.current = { x: e.clientX, y: e.clientY };
     if (!tryingToPlay) return;
     heldLong.current = false;
     if (holdTimer.current !== null) window.clearTimeout(holdTimer.current);
@@ -171,15 +195,21 @@ export function PostSlide({
     }, 260);
   };
 
+  const onSlidePointerMove = (e: React.PointerEvent) => {
+    if (!downPos.current) return;
+    const dx = Math.abs(e.clientX - downPos.current.x);
+    const dy = Math.abs(e.clientY - downPos.current.y);
+    if (dx > 12 || dy > 12) {
+      if (holdTimer.current !== null) {
+        window.clearTimeout(holdTimer.current);
+        holdTimer.current = null;
+      }
+      downPos.current = null;
+    }
+  };
+
   const onSlidePointerUp = (e: React.PointerEvent) => {
-    if (holdTimer.current !== null) {
-      window.clearTimeout(holdTimer.current);
-      holdTimer.current = null;
-    }
-    if (heldLong.current) {
-      setSpeed2x(false);
-      videoRef.current?.setPlaybackRate(1);
-    }
+    clearHold();
     if (active && post.kind === "gallery" && gallery.length > 1 && swipeX.current !== null) {
       const dx = e.clientX - swipeX.current;
       swipeX.current = null;
@@ -243,10 +273,12 @@ export function PostSlide({
     <article
       className={cn("absolute inset-0 overflow-hidden bg-bg", animating && "slide-anim")}
       style={{
-        transform: `translate3d(0, calc(${offset * 100}% + ${drag}px), 0)`,
+        transform: `translate3d(0, ${offset * 100}%, 0)`,
         willChange: "transform",
       }}
+      onContextMenu={(e) => e.preventDefault()}
       onPointerDown={onSlidePointerDown}
+      onPointerMove={onSlidePointerMove}
       onPointerUp={onSlidePointerUp}
       onPointerCancel={onSlidePointerUp}
       onClick={onSlideClick}
@@ -392,7 +424,12 @@ export function PostSlide({
 
       {uiVisible ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 pb-safe">
-          <div className={cn("px-4 pr-20", tryingToPlay && active ? "pb-3" : "pb-6")}>
+          <div
+            className={cn(
+              "px-4 pr-20 [@media(orientation:landscape)_and_(max-height:520px)]:pr-32",
+              tryingToPlay && active ? "pb-3" : "pb-6",
+            )}
+          >
             {post.kind === "gallery" && gallery.length > 1 ? (
               <div className="mb-2.5 flex items-center gap-1.5">
                 {gallery.slice(0, 10).map((_, idx) => (
@@ -423,7 +460,7 @@ export function PostSlide({
               ) : null}
               <span className="tabular-nums text-muted">{formatScore(post.score)}</span>
             </div>
-            <h2 className="text-base font-semibold leading-snug text-balance text-fg line-clamp-3">
+            <h2 className="text-base font-semibold leading-snug text-balance text-fg line-clamp-3 [@media(orientation:landscape)_and_(max-height:520px)]:line-clamp-1 [@media(orientation:landscape)_and_(max-height:520px)]:text-sm">
               {post.title}
             </h2>
             <p className="mt-1 text-xs text-muted">u/{post.author}</p>
