@@ -398,7 +398,9 @@ public class TwitterAuthPlugin extends Plugin {
                     } catch (Exception ignored) {
                         vars = new JSONObject();
                     }
-                    vars.put("count", 40);
+                    if (!vars.has("count")) {
+                        vars.put("count", 20);
+                    }
                     if (!vars.has("includePromotedContent")) {
                         vars.put("includePromotedContent", false);
                     }
@@ -443,8 +445,7 @@ public class TwitterAuthPlugin extends Plugin {
             pollReplayResult(callbackId, ct0, cursor, call, allowReloadFallback, 0);
         } catch (Exception e) {
             if (allowReloadFallback) {
-                capturedBookmarksUrl = null;
-                loadBookmarksPageInWebView(ct0, cursor, call);
+                scrollBookmarksInWebView(ct0, call);
             } else {
                 call.reject("Failed to replay X bookmarks request", e);
             }
@@ -478,14 +479,15 @@ public class TwitterAuthPlugin extends Plugin {
                             String unquoted = new org.json.JSONTokener(result).nextValue().toString();
                             JSONObject obj = new JSONObject(unquoted);
                             int status = obj.optInt("status", 0);
-                            if ((status == 404 || status == 403 || status == 0) && allowReloadFallback) {
-                                capturedBookmarksUrl = null;
-                                loadBookmarksPageInWebView(ct0, cursor, call);
+                            String body = obj.optString("body", "");
+                            boolean hasTimeline = body.contains("bookmark_timeline") || body.contains("TimelineAddEntries");
+                            if ((status < 200 || status >= 300 || !hasTimeline) && allowReloadFallback) {
+                                scrollBookmarksInWebView(ct0, call);
                                 return;
                             }
                             JSObject ret = new JSObject();
                             ret.put("status", status);
-                            ret.put("body", obj.optString("body", ""));
+                            ret.put("body", body);
                             ret.put("screenName", obj.optString("screenName", ""));
                             if (obj.has("error")) ret.put("error", obj.optString("error"));
                             call.resolve(ret);
@@ -494,6 +496,84 @@ public class TwitterAuthPlugin extends Plugin {
                         }
                     });
         }, 150);
+    }
+
+    /**
+     * Scrolls the already-open https://x.com/i/bookmarks WebView so X's own client fires
+     * the next paginated Bookmarks GraphQL request with full client headers.
+     */
+    private void scrollBookmarksInWebView(String ct0, PluginCall call) {
+        if (backgroundWebView == null) {
+            capturedBookmarksUrl = null;
+            loadBookmarksPageInWebView(ct0, null, call);
+            return;
+        }
+        WebView wv = backgroundWebView;
+        String currentUrl = wv.getUrl();
+        if (currentUrl == null || !currentUrl.contains("/i/bookmarks")) {
+            capturedBookmarksUrl = null;
+            loadBookmarksPageInWebView(ct0, null, call);
+            return;
+        }
+        AtomicBoolean settled = new AtomicBoolean(false);
+        wv.evaluateJavascript("window.__flickBookmarksRes=null;window.scrollTo(0,document.body.scrollHeight);window.dispatchEvent(new Event('scroll'));", null);
+        pollScrollBookmarksCapture(wv, call, settled, 0);
+    }
+
+    private void pollScrollBookmarksCapture(
+            WebView wv,
+            PluginCall call,
+            AtomicBoolean settled,
+            int attempt) {
+        if (settled.get()) return;
+        if (backgroundWebView == null || attempt > 40) {
+            if (settled.compareAndSet(false, true)) {
+                JSObject ret = new JSObject();
+                ret.put("status", 200);
+                ret.put("body", "{}");
+                ret.put("screenName", "");
+                call.resolve(ret);
+            }
+            return;
+        }
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (settled.get() || backgroundWebView == null) return;
+            String js = "(function(){"
+                    + "var a=document.querySelector('a[data-testid=\"AppTabBar_Profile_Link\"]');"
+                    + "var sn=a&&a.getAttribute('href')?a.getAttribute('href').replace(/^\\//,''):'';"
+                    + "if(window.__flickBookmarksRes){"
+                    + "  var r=window.__flickBookmarksRes;"
+                    + "  window.__flickBookmarksRes=null;"
+                    + "  return JSON.stringify({hit:true,status:r.status,body:r.body,url:r.url,screenName:sn});"
+                    + "}"
+                    + (attempt % 5 == 4 ? "window.scrollTo(0,document.body.scrollHeight);window.dispatchEvent(new Event('scroll'));" : "")
+                    + "return null;"
+                    + "})()";
+            wv.evaluateJavascript(js, result -> {
+                if (settled.get()) return;
+                if (result == null || "null".equals(result)) {
+                    pollScrollBookmarksCapture(wv, call, settled, attempt + 1);
+                    return;
+                }
+                try {
+                    String unquoted = new org.json.JSONTokener(result).nextValue().toString();
+                    JSONObject obj = new JSONObject(unquoted);
+                    if (obj.optBoolean("hit", false) && settled.compareAndSet(false, true)) {
+                        String foundUrl = obj.optString("url", "");
+                        if (!foundUrl.isEmpty()) capturedBookmarksUrl = foundUrl;
+                        JSObject ret = new JSObject();
+                        ret.put("status", obj.optInt("status", 200));
+                        ret.put("body", obj.optString("body", ""));
+                        ret.put("url", foundUrl);
+                        ret.put("screenName", obj.optString("screenName", ""));
+                        call.resolve(ret);
+                        return;
+                    }
+                } catch (Exception ignored) {
+                }
+                pollScrollBookmarksCapture(wv, call, settled, attempt + 1);
+            });
+        }, 200);
     }
 
     /**

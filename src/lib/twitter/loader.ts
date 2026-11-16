@@ -8,7 +8,7 @@ import {
 import type { TwitterSession } from "./types";
 import type { FlickPost, RedditComment } from "@/lib/reddit/types";
 
-const MAX_BOOKMARK_PAGES = 10;
+const MAX_BOOKMARK_PAGES = 15;
 const FAST_START_PAGES = 3;
 
 export async function loadTwitterBookmarks(

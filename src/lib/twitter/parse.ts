@@ -182,7 +182,9 @@ export function parseTweetResult(raw: unknown): FlickPost | null {
         };
       }
     }
-    const retweeted = asRecord(asRecord(legacy.retweeted_status_result)?.result);
+    const retweeted = asRecord(
+      asRecord(legacy.retweeted_status_result ?? tweet.retweeted_status_result)?.result,
+    );
     if (retweeted) {
       const rtPost = parseTweetResult(retweeted);
       if (rtPost && (rtPost.kind === "video" || rtPost.kind === "image" || rtPost.kind === "gallery")) {
@@ -230,6 +232,15 @@ function extractTimelineInstructions(instructions: unknown[]): {
     if (!rec) continue;
     const entries = [...asArray(rec.entries)];
     if (rec.entry) entries.push(rec.entry);
+
+    for (const sub of asArray(rec.moduleItems)) {
+      const subItem = asRecord(asRecord(sub)?.item);
+      const subTweet = asRecord(asRecord(subItem?.itemContent)?.tweet_results)?.result;
+      if (subTweet) {
+        const parsed = parseTweetResult(subTweet);
+        if (parsed) posts.push(parsed);
+      }
+    }
 
     for (const entry of entries) {
       const eRec = asRecord(entry);

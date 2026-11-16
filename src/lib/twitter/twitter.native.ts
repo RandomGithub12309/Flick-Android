@@ -191,6 +191,12 @@ export async function fetchTwitterBookmarksPage(
     const origin = await ensureLocalServer();
     const json = parseJson(res.body);
     const parsed = parseBookmarksTimeline(json);
+    if (parsed.posts.length === 0 && !parsed.cursor && Array.isArray(json.errors) && json.errors.length > 0) {
+      const errMsg = (json.errors[0] as Record<string, unknown> | undefined)?.message;
+      if (typeof errMsg === "string" && errMsg) {
+        throw new Error(`X bookmarks error: ${errMsg}`);
+      }
+    }
     const resolvedUsername =
       session.username && session.username !== "x"
         ? session.username
