@@ -5,6 +5,7 @@ import { Landing } from "@/components/landing";
 import { completeAuthorizeWatch, stopAuthorizeWatch } from "@/lib/reddit/authorize-watch";
 import { completeOAuthCode } from "@/lib/reddit/oauth-complete";
 import { registerNativeOauthListener } from "@/lib/reddit/native-oauth";
+import { ensureLocalServer } from "@/lib/reddit/native-server";
 import { useFlick } from "@/store/flick";
 
 function LoadingView() {
@@ -39,8 +40,12 @@ export function AppShell() {
   }, []);
 
   // Native (Android): Reddit hands back a flick://oauth deep link instead of
-  // posting a message from a popup.
-  useEffect(() => registerNativeOauthListener(), []);
+  // posting a message from a popup, and the embedded loopback server streams
+  // redgifs clips locally without an external backend.
+  useEffect(() => {
+    void ensureLocalServer();
+    return registerNativeOauthListener();
+  }, []);
 
   return (
     <div

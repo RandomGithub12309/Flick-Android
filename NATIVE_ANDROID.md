@@ -1,58 +1,38 @@
 # Building the Flick Android app
 
-Flick's server functions (Reddit token exchange, fetching saved posts, etc.)
-need a live backend, so the Android app is a thin native shell that loads
-your *deployed* site in a WebView — it isn't a fully offline bundle. The only
-native code is what lets Reddit hand control back to the app after sign-in.
+Flick is **100% self-hosted inside the Android APK** — no Vercel deployment or
+external backend is required.
 
-## One-time setup
+- The React UI is bundled directly into the APK (`npm run build:android` ->
+  `dist/android` -> `android/app/src/main/assets/public`).
+- Reddit OAuth token exchange, saved-post paging, and Redgifs metadata lookups
+  run directly from the device via `CapacitorHttp`.
+- Redgifs MP4 Range streaming runs through an embedded loopback HTTP server
+  (`LocalServer.java` on `127.0.0.1`) inside the Android app.
 
-1. **Deploy the web app** (e.g. `vercel --prod` — `vercel.json` is already
-   configured for it). Use the **production** URL — the bare project alias,
-   e.g. `https://flick-android.vercel.app`.
-2. **Point the app at it** — edit `capacitor.config.ts` and replace
-   `server.url` with that deployed URL.
+## One-time Reddit setup
 
-   > **Use a production URL, never a preview URL.** A preview deployment looks
-   > like `https://flick-android-ehld5hhmk-lr-0a58.vercel.app` — the tell is
-   > the random suffix before `.vercel.app`. Vercel puts preview deployments
-   > behind **Deployment Protection**, so they 302-redirect to
-   > `vercel.com/login`. Inside the app's WebView that renders a Vercel login
-   > page asking for your account credentials instead of Flick, and every
-   > server function (`redditExchangeCode`, saved-post fetching) fails — so
-   > Reddit sign-in can never complete. If the app opens a browser asking for
-   > a password, this is why.
-3. **Register the installed app on Reddit** at reddit.com/prefs/apps:
-   - type: **installed app**
+1. **Register an installed app on Reddit** at `reddit.com/prefs/apps`:
+   - type: **installed app** (not script or web app)
    - redirect URI: `flick://oauth`
-   (You'll also see this exact URI inside the app itself, in the "How do I
-   get an App ID?" panel on the sign-in screen — it's shown automatically
-   whenever the app detects it's running natively.)
-4. Sync the config into the native project:
-   ```
+2. Copy the App ID shown under the app name and paste it into Flick's Reddit
+   setup screen.
+
+## Automatic GitHub Actions build
+
+Pushing to `main` (or triggering the **Build Flick Android APK** workflow
+manually) automatically builds the web bundle, syncs Capacitor, compiles the
+debug APK, and uploads `Flick-Android` (`app-debug.apk`) as a workflow artifact.
+
+## Building locally
+
+1. Build and sync the web assets:
+   ```sh
+   npm run build:android
    npx cap sync android
    ```
-
-## Building the APK
-
-You'll need [Android Studio](https://developer.android.com/studio) (it
-bundles the Android SDK) — this repo can't build the APK itself since that
-needs the SDK and Gradle's own network access, neither of which are available
-here.
-
-1. Open the `android/` folder in Android Studio (or run
-   `npx cap open android`).
-2. Let Gradle sync.
-3. **Build → Build App Bundle(s) / APK(s) → Build APK(s)**.
-4. Grab the APK from `android/app/build/outputs/apk/debug/app-debug.apk` and
-   install it on your phone (enable "install unknown apps" for whichever app
-   you use to transfer it).
-
-For a Play Store–ready build, use **Build → Generate Signed Bundle / APK**
-instead and follow Android Studio's signing wizard.
-
-## Re-syncing after changes
-
-Whenever you change `capacitor.config.ts`, add a Capacitor plugin, or edit
-`AndroidManifest.xml`, run `npx cap sync android` again before rebuilding in
-Android Studio.
+2. Build the debug APK:
+   ```sh
+   cd android && ./gradlew assembleDebug
+   ```
+   The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.

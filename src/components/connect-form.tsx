@@ -3,7 +3,6 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { TwitterPanel } from "@/components/twitter-panel";
 import { refreshDeck } from "@/lib/feed/load";
 import { trackAuthorizePopup } from "@/lib/reddit/authorize-watch";
 import { NATIVE_REDIRECT_URI, isNative, openNativeAuthorize } from "@/lib/reddit/native-oauth";
@@ -25,6 +24,8 @@ export function ConnectForm() {
   const setScreen = useFlick((s) => s.setScreen);
   const setError = useFlick((s) => s.setError);
   const error = useFlick((s) => s.error);
+  const session = useFlick((s) => s.session);
+  const signOut = useFlick((s) => s.signOut);
 
   const [clientId, setClientId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -35,8 +36,6 @@ export function ConnectForm() {
     Boolean(useFlick.getState().redditRedirectUri),
   );
   const defaultRedirect = useMemo(() => redirectUri(), []);
-  // A pasted value wins, because Reddit only accepts the exact string already
-  // registered on the app — which is not always one Flick chose.
   const oauthRedirect = override || defaultRedirect;
 
   async function authorizeInBrowser() {
@@ -61,15 +60,10 @@ export function ConnectForm() {
     url.searchParams.set("duration", "permanent");
     url.searchParams.set("scope", "identity history read");
     if (isNative()) {
-      // Android: opens Reddit in a Custom Tab; it hands control back to the
-      // app via the flick://oauth deep link (see native-oauth.ts).
       await openNativeAuthorize(url.toString());
       return;
     }
     const popup = window.open(url.toString(), "reddit-oauth", "width=480,height=740");
-    // Reddit validates redirect_uri before the person presses Allow and fails
-    // with a bare `{}` on its own endpoint if it doesn't match — no redirect
-    // ever reaches us, so watch the popup ourselves or the user is stranded.
     if (!popup) {
       window.location.href = url.toString();
       return;
@@ -81,10 +75,7 @@ export function ConnectForm() {
     setBusy(true);
     setError(null);
     try {
-      // Reddit's public mix on its own, deliberately: this button is what you
-      // press before any of it is configured, and a lane that isn't set up yet
-      // shouldn't decide whether the sample works.
-      await refreshDeck({ reddit: "demo", twitter: false });
+      await refreshDeck({ reddit: "demo" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Demo feed failed.");
       setScreen("connect");
@@ -106,14 +97,24 @@ export function ConnectForm() {
           <ArrowLeft className="size-5" />
         </Button>
         <div>
-          <h1 className="text-lg font-semibold">Sources</h1>
+          <h1 className="text-lg font-semibold">Reddit</h1>
           <p className="text-sm text-muted">
-            Reddit&rsquo;s saved posts and one X account, mixed into a single deck.
+            {session ? `Signed in as u/${session.username}` : "Connect your saved posts."}
           </p>
         </div>
       </header>
 
-      <h2 className="mt-2 text-xs font-medium uppercase tracking-[0.18em] text-muted">Reddit</h2>
+      {session ? (
+        <div className="mb-6 flex items-center justify-between rounded-xl bg-surface-2 px-4 py-3 shadow-[var(--shadow-border)]">
+          <div>
+            <p className="text-sm font-medium text-fg">u/{session.username}</p>
+            <p className="text-xs text-muted">Connected</p>
+          </div>
+          <Button variant="ghost" size="sm" onClick={signOut}>
+            Sign out
+          </Button>
+        </div>
+      ) : null}
 
       <form
         className="flex flex-col gap-4 pb-6"
@@ -225,23 +226,9 @@ export function ConnectForm() {
         ) : null}
       </form>
 
-      <h2 className="mb-2 mt-4 text-xs font-medium uppercase tracking-[0.18em] text-muted">X</h2>
-      <TwitterPanel />
-
-      <Button
-        size="md"
-        variant="secondary"
-        className="mt-5 w-full"
-        disabled={busy}
-        onClick={() => void refreshDeck()}
-      >
-        Shuffle what&rsquo;s on
-      </Button>
-
       <p className="mt-auto pt-6 text-xs leading-normal text-subtle">
         Flick never sees your Reddit password — you sign in on reddit.com, and only the access token
-        is stored on this device. Your X bearer token is stored the same way and sent only to
-        Flick&rsquo;s own server.
+        is stored on this device.
       </p>
     </div>
   );

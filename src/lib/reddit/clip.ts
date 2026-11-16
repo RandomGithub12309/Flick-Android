@@ -1,4 +1,4 @@
-import { redgifsClip } from "@/lib/reddit/functions";
+import { callRedgifsClip } from "@/lib/reddit/api";
 import type { FlickVideo } from "@/lib/reddit/types";
 
 /**
@@ -23,7 +23,7 @@ export function requestRedgifsClip(
   const existing = inFlight.get(key);
   if (existing) return existing;
 
-  const request = redgifsClip({ data: { id, fresh: options.fresh ?? false } })
+  const request = callRedgifsClip({ id, fresh: options.fresh ?? false })
     .then((clip): FlickVideo | null =>
       clip
         ? {

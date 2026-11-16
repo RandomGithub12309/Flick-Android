@@ -1,5 +1,5 @@
 import { refreshDeck } from "@/lib/feed/load";
-import { redditExchangeCode } from "@/lib/reddit/functions";
+import { callExchangeCode } from "@/lib/reddit/api";
 import { useFlick } from "@/store/flick";
 
 type PendingOauth = {
@@ -39,12 +39,10 @@ export async function completeOAuthCode(code: string, state: string): Promise<vo
   }
   try {
     store.setLoading("Signing in with Reddit…");
-    const tokens = await redditExchangeCode({
-      data: {
-        code,
-        redirectUri: saved.redirectUri,
-        clientId: saved.clientId,
-      },
+    const tokens = await callExchangeCode({
+      code,
+      redirectUri: saved.redirectUri,
+      clientId: saved.clientId,
     });
     const session = {
       username: tokens.username,
@@ -55,9 +53,6 @@ export async function completeOAuthCode(code: string, state: string): Promise<vo
     };
     store.setSession(session);
     sessionStorage.removeItem("flick.oauth");
-    // Straight into the deck, X lane included: the person has just gone to
-    // some trouble to sign in, and making them press shuffle afterwards would
-    // hide whether the mix actually worked.
     await refreshDeck({ reddit: "saved" });
   } catch (err) {
     store.setError(err instanceof Error ? err.message : "OAuth failed.");

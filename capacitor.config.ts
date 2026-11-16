@@ -1,32 +1,24 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 /**
- * Flick's Android wrapper.
+ * Flick's self-hosted Android wrapper.
  *
- * Flick is a full-stack app (Reddit token exchange, saved-post fetching, etc.
- * all run as server functions), so the packaged app is a thin native shell
- * that loads the *live deployed* site — not a bundled static copy of it.
+ * The web app is bundled directly inside the APK (`dist/android` ->
+ * `android/app/src/main/assets/public`) with no external server or Vercel
+ * deployment required. Reddit/Redgifs API calls run natively via CapacitorHttp,
+ * and Redgifs video range-streaming is served by the app's own embedded
+ * loopback HTTP server (`LocalServer.java` on 127.0.0.1).
  *
- * >>> This must be a *production* (production-alias) deployment URL.
- * >>> Preview deployment URLs (…-lr-0a58.vercel.app) are behind Vercel
- * >>> Deployment Protection and 302-redirect to vercel.com/login, which
- * >>> renders a login wall inside the WebView and breaks every server
- * >>> function call. Run `npx cap sync android` after changing it.
- *
- * The custom URL scheme below ("flick://oauth") is what lets Reddit hand
- * control back to this native app after the person authorizes in the
- * system browser — see src/lib/reddit/native-oauth.ts and
- * android/app/src/main/AndroidManifest.xml.
+ * `androidScheme: "http"` serves the bundled SPA on `http://localhost` so
+ * `<video src="http://127.0.0.1:<port>/api/redgifs/...">` is not blocked as
+ * mixed content by Android WebView.
  */
 const config: CapacitorConfig = {
   appId: "app.flick.saved",
   appName: "Flick",
-  webDir: "native/www",
+  webDir: "dist/android",
   server: {
-    // Production deployment. Do NOT point this at a Vercel *preview* URL —
-    // those are protected by a Vercel login wall that the WebView can't pass.
-    url: "https://flick-android.vercel.app",
-    cleartext: false,
+    androidScheme: "http",
   },
 };
 
