@@ -7,7 +7,7 @@ import {
   resolveQueryIds,
   type TwitterOperation,
 } from "./graphql";
-import { fetchViaTwitterWebView } from "./native-auth";
+import { fetchViaTwitterWebView, loadBookmarksViaTwitterWebView } from "./native-auth";
 import {
   parseBookmarksTimeline,
   parseTweetDetailComments,
@@ -144,6 +144,39 @@ export async function fetchTwitterBookmarksPage(
   cursor?: string | null,
   count = 40,
 ): Promise<TwitterPage> {
+  if (Capacitor.isNativePlatform()) {
+    const res = await loadBookmarksViaTwitterWebView({
+      authToken: session.authToken,
+      ct0: session.ct0,
+      cursor: cursor ?? null,
+    });
+    if (res.status === 401) {
+      throw new Error("X session expired — sign in to X again.");
+    }
+    if (res.status < 200 || res.status >= 300) {
+      const errBody = parseJson(res.body);
+      const errMsg = Array.isArray(errBody.errors)
+        ? (errBody.errors[0] as Record<string, unknown> | undefined)?.message
+        : undefined;
+      throw new Error(
+        typeof errMsg === "string" && errMsg
+          ? `X request failed (${res.status}): ${errMsg}`
+          : res.error || `X request failed (${res.status}).`,
+      );
+    }
+    const json = parseJson(res.body);
+    const parsed = parseBookmarksTimeline(json);
+    const resolvedUsername =
+      session.username && session.username !== "x"
+        ? session.username
+        : res.screenName?.trim() || session.username;
+    return {
+      posts: parsed.posts,
+      cursor: parsed.cursor,
+      username: resolvedUsername,
+    };
+  }
+
   const variables: Record<string, unknown> = {
     count,
     includePromotedContent: false,

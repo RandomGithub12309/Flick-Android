@@ -172,8 +172,11 @@ export function ConnectForm() {
     };
     setTwitterBusy(true);
     try {
-      await fetchTwitterBookmarksPage(candidate, null, 1);
-      setTwitterSession(candidate);
+      const page = await fetchTwitterBookmarksPage(candidate, null, 1);
+      setTwitterSession({
+        ...candidate,
+        username: page.username || candidate.username,
+      });
       setXAuthInput("");
       setXCt0Input("");
     } catch (err) {
