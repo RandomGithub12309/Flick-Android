@@ -1,13 +1,17 @@
 import { Capacitor } from "@capacitor/core";
 import {
   nativeExchangeCode,
+  nativeFetchComments,
   nativeFetchDemoFeed,
   nativeFetchSavedPage,
+  nativeFetchSubredditFeed,
   nativeRefreshGrant,
   nativeResolveRedgifsClip,
+  nativeSavePost,
+  nativeSearchSubreddits,
   nativeUnsavePost,
 } from "./reddit.native";
-import type { FlickPost, SavedPage } from "./types";
+import type { FlickPost, RedditComment, SavedPage, SubredditInfo, SubredditSort } from "./types";
 import type { RedgifsClip, TokenBundle } from "./reddit.native";
 
 function native(): boolean {
@@ -56,12 +60,47 @@ export async function callSavedPage(input: {
   return redditSavedPage({ data: input });
 }
 
-export async function callDemoFeed(subreddits?: string[]): Promise<FlickPost[]> {
+export async function callDemoFeed(subreddits?: string[], accessToken?: string): Promise<FlickPost[]> {
   if (native()) {
-    return nativeFetchDemoFeed(subreddits);
+    return nativeFetchDemoFeed(subreddits, accessToken);
   }
   const { redditDemoFeed } = await import("./functions");
   return redditDemoFeed({ data: { subreddits } });
+}
+
+export async function callSubredditFeed(input: {
+  subreddit: string;
+  sort?: SubredditSort;
+  accessToken?: string;
+}): Promise<FlickPost[]> {
+  if (native()) {
+    return nativeFetchSubredditFeed(input);
+  }
+  const { redditSubredditFeed } = await import("./functions");
+  return redditSubredditFeed({ data: input });
+}
+
+export async function callSearchSubreddits(input: {
+  query: string;
+  accessToken?: string;
+}): Promise<SubredditInfo[]> {
+  if (native()) {
+    return nativeSearchSubreddits(input);
+  }
+  const { redditSearchSubreddits } = await import("./functions");
+  return redditSearchSubreddits({ data: input });
+}
+
+export async function callPostComments(input: {
+  subreddit: string;
+  postId: string;
+  accessToken?: string;
+}): Promise<RedditComment[]> {
+  if (native()) {
+    return nativeFetchComments(input);
+  }
+  const { redditComments } = await import("./functions");
+  return redditComments({ data: input });
 }
 
 export async function callUnsavePost(input: {
@@ -73,6 +112,17 @@ export async function callUnsavePost(input: {
   }
   const { redditUnsave } = await import("./functions");
   return redditUnsave({ data: input });
+}
+
+export async function callSavePost(input: {
+  accessToken: string;
+  fullname: string;
+}): Promise<void> {
+  if (native()) {
+    return nativeSavePost(input);
+  }
+  const { redditSave } = await import("./functions");
+  return redditSave({ data: input });
 }
 
 export async function callRedgifsClip(input: {

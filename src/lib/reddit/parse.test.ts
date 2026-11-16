@@ -347,3 +347,72 @@ describe("redgifs ids", () => {
     assert.equal(redgifsIdFromPost(post), "fromembed");
   });
 });
+
+describe("deleted and media-only filtering", () => {
+  it("rejects deleted or removed non-redgifs posts", () => {
+    assert.equal(
+      parseRedditPost(
+        listing({
+          author: "[deleted]",
+          url: "https://i.redd.it/dead.jpg",
+        }),
+      ),
+      null,
+    );
+    assert.equal(
+      parseRedditPost(
+        listing({
+          removed_by_category: "moderator",
+          url: "https://i.redd.it/mod.jpg",
+        }),
+      ),
+      null,
+    );
+    assert.equal(
+      parseRedditPost(
+        listing({
+          selftext: "[deleted]",
+          url: "https://i.redd.it/body.jpg",
+        }),
+      ),
+      null,
+    );
+  });
+
+  it("rejects text and non-media link posts", () => {
+    assert.equal(
+      parseRedditPost(
+        listing({
+          is_self: true,
+          selftext: "just a text post",
+          url: "https://www.reddit.com/r/Unexpected/comments/abc123/",
+        }),
+      ),
+      null,
+    );
+    assert.equal(
+      parseRedditPost(
+        listing({
+          url: "https://example.com/article",
+          domain: "example.com",
+        }),
+      ),
+      null,
+    );
+  });
+
+  it("never classifies redgifs videos as deleted even when Reddit author/moderator removed", () => {
+    const post = parseRedditPost(
+      listing({
+        author: "[deleted]",
+        removed_by_category: "moderator",
+        selftext: "[deleted]",
+        url: "https://www.redgifs.com/watch/fancyyellowduck",
+        domain: "redgifs.com",
+      }),
+    );
+
+    assert.ok(post);
+    assert.equal(post?.redgifsId, "fancyyellowduck");
+  });
+});

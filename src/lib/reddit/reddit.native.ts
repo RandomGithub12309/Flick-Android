@@ -1,9 +1,15 @@
 import { CapacitorHttp } from "@capacitor/core";
 import { ensureLocalServer } from "./native-server";
-import { parseListingChildren, parseRedditPost, redgifsIdFromPost } from "./parse";
+import {
+  parseListingChildren,
+  parsePostComments,
+  parseRedditPost,
+  parseSubredditSearch,
+  redgifsIdFromPost,
+} from "./parse";
 import { redgifsProxyUrl } from "./redgifs";
 import { audioCandidatesFor } from "../video-sources";
-import type { FlickPost, SavedPage } from "./types";
+import type { FlickPost, RedditComment, SavedPage, SubredditInfo, SubredditSort } from "./types";
 
 const USER_AGENT = "android:app.flick.saved:1.0.0 (by /u/flick-player)";
 const TOKEN_URL = "https://www.reddit.com/api/v1/access_token";
@@ -282,12 +288,15 @@ async function mapWithConcurrency<T, R>(
 
 async function resolveExternalVideos(posts: FlickPost[]): Promise<FlickPost[]> {
   await ensureLocalServer();
-  return await mapWithConcurrency(posts, 6, async (post): Promise<FlickPost> => {
+  const mapped = await mapWithConcurrency(posts, 6, async (post): Promise<FlickPost | null> => {
     if (post.kind !== "video" && post.kind !== "link") return post;
     const gifId = redgifsIdFromPost(post);
-    if (!gifId) return post;
+    if (!gifId) return post.kind === "link" ? null : post;
     const clip = await nativeResolveRedgifsClip(gifId);
-    if (!clip) return post;
+    if (!clip) {
+      // Drop dead Redgifs links that have no Reddit video fallback.
+      return post.video ? post : null;
+    }
     return {
       ...post,
       kind: "video",
@@ -303,6 +312,7 @@ async function resolveExternalVideos(posts: FlickPost[]): Promise<FlickPost[]> {
       },
     };
   });
+  return mapped.filter((p): p is FlickPost => p !== null);
 }
 
 export async function nativeFetchSavedPage(input: {
@@ -326,30 +336,79 @@ export async function nativeFetchSavedPage(input: {
 
 const DEMO_SUBS = ["Unexpected", "nextfuckinglevel", "Damnthatsinteresting", "nsfw", "NSFW_GIF"];
 
-export async function nativeFetchDemoFeed(subreddits?: string[]): Promise<FlickPost[]> {
+async function fetchSubredditListing(
+  subreddit: string,
+  sort: SubredditSort = "hot",
+  accessToken?: string,
+  limit = 30,
+): Promise<FlickPost[]> {
+  const clean = subreddit.replace(/^\/?r\//i, "").trim();
+  if (!clean) return [];
+  const params = new URLSearchParams({
+    limit: String(limit),
+    raw_json: "1",
+    include_over_18: "1",
+  });
+  if (sort === "top") params.set("t", "week");
+
+  if (accessToken) {
+    try {
+      const json = await oauthGet(
+        `/r/${encodeURIComponent(clean)}/${sort}?${params.toString()}`,
+        accessToken,
+      );
+      return parseListingChildren(json).posts;
+    } catch {
+      // Fall through to public Reddit JSON.
+    }
+  }
+
+  try {
+    const res = await CapacitorHttp.request({
+      url: `https://www.reddit.com/r/${encodeURIComponent(clean)}/${sort}.json?${params.toString()}`,
+      method: "GET",
+      headers: {
+        "User-Agent": USER_AGENT,
+        Cookie: "over18=1",
+      },
+      connectTimeout: 8000,
+      readTimeout: 8000,
+    });
+    if (res.status >= 200 && res.status < 300) {
+      const json = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+      const posts = parseListingChildren(json).posts;
+      if (posts.length > 0) return posts;
+    }
+  } catch {
+    // Fall back to Arctic Shift only if Reddit public JSON is unreachable.
+  }
+
+  const url = `https://arctic-shift.photon-reddit.com/api/posts/search?subreddit=${encodeURIComponent(clean)}&limit=${limit}&sort=desc&sort_type=created_utc`;
+  const res = await CapacitorHttp.request({
+    url,
+    method: "GET",
+    headers: { "User-Agent": USER_AGENT },
+    connectTimeout: 8000,
+    readTimeout: 8000,
+  });
+  if (res.status < 200 || res.status >= 300) throw new Error(String(res.status));
+  const json = (typeof res.data === "string" ? JSON.parse(res.data) : res.data) as {
+    data?: unknown[];
+  };
+  const rows = Array.isArray(json?.data) ? json.data : [];
+  return rows
+    .map((row) => parseRedditPost({ kind: "t3", data: row }))
+    .filter((p): p is FlickPost => p !== null);
+}
+
+export async function nativeFetchDemoFeed(
+  subreddits?: string[],
+  accessToken?: string,
+): Promise<FlickPost[]> {
   const subs = subreddits && subreddits.length > 0 ? subreddits : DEMO_SUBS;
   const collected: FlickPost[] = [];
   const results = await Promise.allSettled(
-    subs.map(async (sub) => {
-      const clean = sub.replace(/^\/?r\//i, "").trim();
-      if (!clean) return [];
-      const url = `https://arctic-shift.photon-reddit.com/api/posts/search?subreddit=${encodeURIComponent(clean)}&limit=20&sort=desc&sort_type=created_utc`;
-      const res = await CapacitorHttp.request({
-        url,
-        method: "GET",
-        headers: { "User-Agent": USER_AGENT },
-        connectTimeout: 8000,
-        readTimeout: 8000,
-      });
-      if (res.status < 200 || res.status >= 300) throw new Error(String(res.status));
-      const json = (typeof res.data === "string" ? JSON.parse(res.data) : res.data) as {
-        data?: unknown[];
-      };
-      const rows = Array.isArray(json?.data) ? json.data : [];
-      return rows
-        .map((row) => parseRedditPost({ kind: "t3", data: row }))
-        .filter((p): p is FlickPost => p !== null);
-    }),
+    subs.map((sub) => fetchSubredditListing(sub, "hot", accessToken, 25)),
   );
   for (const result of results) {
     if (result.status === "fulfilled") collected.push(...result.value);
@@ -360,6 +419,76 @@ export async function nativeFetchDemoFeed(subreddits?: string[]): Promise<FlickP
     if (!unique.has(post.id)) unique.set(post.id, post);
   }
   return [...unique.values()];
+}
+
+export async function nativeFetchSubredditFeed(input: {
+  subreddit: string;
+  sort?: SubredditSort;
+  accessToken?: string;
+}): Promise<FlickPost[]> {
+  const raw = await fetchSubredditListing(
+    input.subreddit,
+    input.sort ?? "hot",
+    input.accessToken,
+    40,
+  );
+  return resolveExternalVideos(raw);
+}
+
+export async function nativeSearchSubreddits(input: {
+  query: string;
+  accessToken?: string;
+}): Promise<SubredditInfo[]> {
+  const q = input.query.trim().replace(/^\/?r\//i, "");
+  if (!q) return [];
+  const params = new URLSearchParams({
+    q,
+    limit: "10",
+    include_over_18: "1",
+    raw_json: "1",
+  });
+  if (input.accessToken) {
+    const json = await oauthGet(`/subreddits/search?${params.toString()}`, input.accessToken);
+    return parseSubredditSearch(json);
+  }
+  const res = await CapacitorHttp.request({
+    url: `https://www.reddit.com/subreddits/search.json?${params.toString()}`,
+    method: "GET",
+    headers: { "User-Agent": USER_AGENT, Cookie: "over18=1" },
+    connectTimeout: 8000,
+    readTimeout: 8000,
+  });
+  if (res.status < 200 || res.status >= 300) return [];
+  const json = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+  return parseSubredditSearch(json);
+}
+
+export async function nativeFetchComments(input: {
+  subreddit: string;
+  postId: string;
+  accessToken?: string;
+}): Promise<RedditComment[]> {
+  const sub = encodeURIComponent(input.subreddit.replace(/^\/?r\//i, ""));
+  const id = encodeURIComponent(input.postId);
+  const path = `/r/${sub}/comments/${id}?limit=30&depth=1&sort=top&raw_json=1`;
+  if (input.accessToken) {
+    try {
+      const json = await oauthGet(path, input.accessToken);
+      return parsePostComments(json);
+    } catch {
+      // Fall back to public JSON.
+    }
+  }
+  const res = await CapacitorHttp.request({
+    url: `https://www.reddit.com/r/${sub}/comments/${id}.json?limit=30&depth=1&sort=top&raw_json=1`,
+    method: "GET",
+    headers: { "User-Agent": USER_AGENT, Cookie: "over18=1" },
+    connectTimeout: 8000,
+    readTimeout: 8000,
+  });
+  if (res.status < 200 || res.status >= 300) return [];
+  const json = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+  return parsePostComments(json);
 }
 
 export async function nativeUnsavePost(input: {
@@ -381,5 +510,27 @@ export async function nativeUnsavePost(input: {
   }
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`Could not unsave post (${res.status})`);
+  }
+}
+
+export async function nativeSavePost(input: {
+  accessToken: string;
+  fullname: string;
+}): Promise<void> {
+  const res = await CapacitorHttp.request({
+    url: `${OAUTH}/api/save`,
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.accessToken}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": USER_AGENT,
+    },
+    data: new URLSearchParams({ id: input.fullname }).toString(),
+  });
+  if (res.status === 401) {
+    throw new Error("Reddit session expired. Sign in again.");
+  }
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Could not save post (${res.status})`);
   }
 }

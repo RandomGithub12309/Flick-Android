@@ -83,3 +83,22 @@ export type SavedPage = {
   after: string | null;
   username: string;
 };
+
+export type SubredditSort = "hot" | "top" | "new";
+
+export type SubredditInfo = {
+  name: string;
+  title: string;
+  subscribers: number;
+  nsfw: boolean;
+  icon?: string;
+};
+
+export type RedditComment = {
+  id: string;
+  author: string;
+  body: string;
+  score: number;
+  createdUtc: number;
+};
+

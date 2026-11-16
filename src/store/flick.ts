@@ -1,10 +1,10 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { mediaKeyOf, orderDeck } from "@/lib/feed/mix";
-import type { FlickPost, RedditSession } from "@/lib/reddit/types";
+import type { FlickPost, RedditSession, SubredditSort } from "@/lib/reddit/types";
 
 export type Screen = "home" | "connect" | "loading" | "feed";
-export type FeedSource = "saved" | "demo";
+export type FeedSource = "saved" | "demo" | "subreddit";
 export type MediaFilter = "all" | "video";
 
 export const DEFAULT_SUBREDDITS = [
@@ -19,12 +19,15 @@ type FlickState = {
   ageOk: boolean;
   screen: Screen;
   source: FeedSource;
+  activeSubreddit: string | null;
+  subredditSort: SubredditSort;
   session: RedditSession | null;
   redditClientId: string;
   redditRedirectUri: string;
   customSubreddits: string[];
   mediaFilter: MediaFilter;
   showNsfw: boolean;
+  autoAdvance: boolean;
   posts: FlickPost[];
   index: number;
   muted: boolean;
@@ -40,12 +43,15 @@ type FlickState = {
   setCustomSubreddits: (subs: string[]) => void;
   setMediaFilter: (filter: MediaFilter) => void;
   setShowNsfw: (show: boolean) => void;
+  setAutoAdvance: (auto: boolean) => void;
+  setSubredditSort: (sort: SubredditSort) => void;
   setError: (error: string | null) => void;
   setNotice: (notice: string | null) => void;
   setLoading: (label: string, count?: number) => void;
-  setPosts: (posts: FlickPost[], source: FeedSource) => void;
+  setPosts: (posts: FlickPost[], source: FeedSource, subreddit?: string | null) => void;
   appendPosts: (more: FlickPost[]) => void;
   removePost: (id: string) => void;
+  insertPostAt: (post: FlickPost, atIndex: number) => void;
   setIndex: (index: number) => void;
   next: () => void;
   prev: () => void;
@@ -63,8 +69,11 @@ export const useFlick = create<FlickState>()(
       customSubreddits: DEFAULT_SUBREDDITS,
       mediaFilter: "all",
       showNsfw: true,
+      autoAdvance: false,
       screen: "home",
       source: "demo",
+      activeSubreddit: null,
+      subredditSort: "hot",
       session: null,
       posts: [],
       index: 0,
@@ -84,18 +93,24 @@ export const useFlick = create<FlickState>()(
         }),
       setMediaFilter: (mediaFilter) => set({ mediaFilter }),
       setShowNsfw: (showNsfw) => set({ showNsfw }),
+      setAutoAdvance: (autoAdvance) => set({ autoAdvance }),
+      setSubredditSort: (subredditSort) => set({ subredditSort }),
       setError: (error) => set({ error }),
       setNotice: (notice) => set({ notice }),
       setLoading: (label, count = 0) =>
         set({ screen: "loading", loadingLabel: label, loadingCount: count, error: null }),
-      setPosts: (posts, source) => {
-        const deck = orderDeck(posts);
+      setPosts: (posts, source, subreddit = null) => {
+        const deck = source === "subreddit" ? posts : orderDeck(posts);
         set({
           posts: deck,
           source,
+          activeSubreddit: source === "subreddit" ? subreddit : null,
           index: 0,
           screen: deck.length > 0 ? "feed" : "home",
-          error: deck.length === 0 ? "Nothing to play. Try adjusting your filters or saving a video." : null,
+          error:
+            deck.length === 0
+              ? "Nothing to play. Try adjusting your filters or saving a video."
+              : null,
         });
       },
       appendPosts: (more) => {
@@ -131,6 +146,14 @@ export const useFlick = create<FlickState>()(
           index: Math.min(index, nextPosts.length - 1),
         });
       },
+      insertPostAt: (post, atIndex) => {
+        const { posts } = get();
+        if (posts.some((p) => p.id === post.id)) return;
+        const clamped = Math.max(0, Math.min(atIndex, posts.length));
+        const nextPosts = [...posts];
+        nextPosts.splice(clamped, 0, post);
+        set({ posts: nextPosts, index: clamped, screen: "feed" });
+      },
       setIndex: (index) => {
         const { posts } = get();
         if (posts.length === 0) return;
@@ -162,6 +185,7 @@ export const useFlick = create<FlickState>()(
           index: 0,
           screen: "home",
           source: "demo",
+          activeSubreddit: null,
           error: null,
           notice: null,
         }),
@@ -172,11 +196,18 @@ export const useFlick = create<FlickState>()(
         ageOk: state.ageOk,
         session: state.session,
         muted: state.muted,
+        autoAdvance: state.autoAdvance,
+        subredditSort: state.subredditSort,
         redditClientId: state.redditClientId,
         redditRedirectUri: state.redditRedirectUri,
         customSubreddits: state.customSubreddits,
         mediaFilter: state.mediaFilter,
         showNsfw: state.showNsfw,
+        // Instant resume: cache up to 80 posts and current index.
+        posts: state.posts.slice(0, 80),
+        index: Math.min(state.index, Math.max(0, Math.min(state.posts.length, 80) - 1)),
+        source: state.source,
+        activeSubreddit: state.activeSubreddit,
       }),
     },
   ),

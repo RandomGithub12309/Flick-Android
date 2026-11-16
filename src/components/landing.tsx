@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Download, Layers, Smartphone, Volume2 } from "lucide-react";
+import { Download, Layers, Play, Smartphone, Volume2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SourceChips } from "@/components/source-chips";
+import { SubredditSearch } from "@/components/subreddit-search";
 import { refreshDeck } from "@/lib/feed/load";
 import { checkForAppUpdate, openUpdateDownload, type AppUpdateInfo } from "@/lib/reddit/app-update";
 import { isNative } from "@/lib/reddit/native-oauth";
@@ -17,6 +18,7 @@ export function Landing() {
   const acceptAge = useFlick((s) => s.acceptAge);
   const setScreen = useFlick((s) => s.setScreen);
   const session = useFlick((s) => s.session);
+  const cachedPosts = useFlick((s) => s.posts);
   const error = useFlick((s) => s.error);
   const [busy, setBusy] = useState(false);
   const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
@@ -86,34 +88,46 @@ export function Landing() {
   return (
     <main className="grain flex min-h-dvh flex-col bg-bg px-6 pt-safe pb-safe">
       <div className="relative z-10 mx-auto flex w-full max-w-md flex-1 flex-col">
-        <div className="flex-1 pt-12">
+        <div className="flex-1 pt-10">
           <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted">
             Saved-post player
           </p>
-          <h1 className="mt-4 text-6xl font-semibold tracking-tight text-fg">Flick</h1>
-          <p className="mt-4 max-w-sm text-lg leading-snug text-muted">
+          <h1 className="mt-3 text-6xl font-semibold tracking-tight text-fg">Flick</h1>
+          <p className="mt-3 max-w-sm text-lg leading-snug text-muted">
             Your saved Reddit posts in one swipeable, full-screen deck.
           </p>
-          <ul className="mt-8 space-y-3 text-sm text-muted">
-            <li className="flex items-center gap-3">
-              <Layers className="size-4 shrink-0 text-fg" />
-              Tap to pause, swipe to advance, and auto-skip broken clips.
-            </li>
-            <li className="flex items-center gap-3">
-              <Volume2 className="size-4 shrink-0 text-fg" />
-              Sound enabled. Videos play unmuted.
-            </li>
-            <li className="flex items-center gap-3">
-              <span className="inline-block size-4 shrink-0 rounded-full bg-danger/70" />
-              NSFW is shown by default (configurable in settings).
-            </li>
-            {!standalone ? (
+
+          {session ? (
+            <div className="mt-6">
+              <SubredditSearch
+                compact
+                onSelectSubreddit={(subreddit, sort) =>
+                  void play({ reddit: "subreddit", subreddit, sort })
+                }
+              />
+            </div>
+          ) : (
+            <ul className="mt-8 space-y-3 text-sm text-muted">
               <li className="flex items-center gap-3">
-                <Smartphone className="size-4 shrink-0 text-fg" />
-                Install to your home screen for a full-screen app.
+                <Layers className="size-4 shrink-0 text-fg" />
+                Tap to pause, hold for 2x, double-tap to seek, swipe to advance.
               </li>
-            ) : null}
-          </ul>
+              <li className="flex items-center gap-3">
+                <Volume2 className="size-4 shrink-0 text-fg" />
+                Sound enabled. Videos play unmuted.
+              </li>
+              <li className="flex items-center gap-3">
+                <span className="inline-block size-4 shrink-0 rounded-full bg-danger/70" />
+                NSFW is shown by default (configurable in settings).
+              </li>
+              {!standalone ? (
+                <li className="flex items-center gap-3">
+                  <Smartphone className="size-4 shrink-0 text-fg" />
+                  Install to your home screen for a full-screen app.
+                </li>
+              ) : null}
+            </ul>
+          )}
         </div>
 
         <div className="mt-6 flex flex-col gap-3 pb-8">
@@ -132,6 +146,19 @@ export function Landing() {
           <SourceChips />
 
           {error ? <p className="text-sm text-danger">{error}</p> : null}
+
+          {cachedPosts.length > 0 ? (
+            <Button
+              size="lg"
+              variant="secondary"
+              className="w-full gap-2"
+              disabled={busy}
+              onClick={() => setScreen("feed")}
+            >
+              <Play className="size-4" />
+              Resume ({cachedPosts.length})
+            </Button>
+          ) : null}
 
           <Button size="lg" className="w-full" disabled={busy} onClick={() => void play()}>
             {busy ? "Loading…" : primaryLabel}

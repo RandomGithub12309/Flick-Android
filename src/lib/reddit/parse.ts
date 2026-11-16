@@ -262,6 +262,28 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
       ? (asRecord(cross[0]) ?? data)
       : data;
 
+  const redgifsId = redgifsIdFromRaw(data, sourceData);
+  const removedBy = asString(data.removed_by_category) ?? asString(sourceData.removed_by_category);
+  const selftext = asString(data.selftext);
+  const isDeletedAuthor = author === "[deleted]";
+  const isDeletedTitle = title === "[deleted by user]" || title === "[removed]";
+  const isDeletedBody = selftext === "[deleted]" || selftext === "[removed]";
+  const isRemovedFlag =
+    asBool(data.removed) ||
+    asBool(data.deleted) ||
+    asBool(sourceData.removed) ||
+    asBool(sourceData.deleted);
+
+  // Never classify Redgifs videos as deleted just because the Reddit post's
+  // author/body/moderator state changed — only drop legal takedowns.
+  if (redgifsId) {
+    if (removedBy === "copyright_takedown" || removedBy === "content_takedown") {
+      return null;
+    }
+  } else if (removedBy || isRemovedFlag || isDeletedAuthor || isDeletedTitle || isDeletedBody) {
+    return null;
+  }
+
   const nsfw = asBool(data.over_18) || asBool(sourceData.over_18);
   const url = asString(sourceData.url_overridden_by_dest) ?? asString(sourceData.url) ?? "";
   const domain = asString(sourceData.domain);
@@ -300,7 +322,6 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
       ? { url: decodeUrl(url) }
       : undefined;
 
-  const selftext = asString(data.selftext);
   const isSelf = asBool(data.is_self);
 
   let kind: FlickPost["kind"] = "link";
@@ -315,14 +336,17 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
   } else if (directImage) {
     kind = "image";
     image = directImage;
-  } else if (previewImage) {
-    kind = url && !isSelf ? "link" : "image";
+  } else if (previewImage && !isSelf && redgifsId) {
+    kind = "link";
     image = previewImage;
-  } else if (isSelf || (selftext && selftext.length > 0)) {
-    kind = "text";
   } else {
     kind = "link";
     image = previewImage;
+  }
+
+  // Only keep images, galleries, videos, and Redgifs posts (which resolve to videos).
+  if (kind !== "video" && kind !== "image" && kind !== "gallery" && !redgifsId) {
+    return null;
   }
 
   const thumbRaw = asString(data.thumbnail);
@@ -337,7 +361,7 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
     author,
     permalink,
     sourceUrl: url ? decodeUrl(url) : undefined,
-    redgifsId: redgifsIdFromRaw(data, sourceData),
+    redgifsId,
     nsfw,
     score: asNumber(data.score) ?? 0,
     createdUtc: asNumber(data.created_utc) ?? 0,
@@ -345,16 +369,11 @@ export function parseRedditPost(raw: unknown): FlickPost | null {
     video,
     image,
     gallery,
-    text: selftext && selftext !== "[removed]" ? selftext : undefined,
+    text: selftext && selftext !== "[removed]" && selftext !== "[deleted]" ? selftext : undefined,
     thumbnail,
     domain,
   };
 
-  // A bare redgifs link post (no Reddit thumbnail to fall back on) is still
-  // worth keeping: the server resolves the clip and turns it into a video.
-  if (kind === "link" && !post.image && !post.video && !post.text && !post.redgifsId) {
-    return null;
-  }
   return post;
 }
 
@@ -374,4 +393,57 @@ export function parseListingChildren(raw: unknown): {
   }
   const after = asString(data?.after) ?? null;
   return { posts, after };
+}
+
+export function parseSubredditSearch(raw: unknown): import("./types").SubredditInfo[] {
+  const root = asRecord(raw);
+  const data = asRecord(root?.data);
+  const children = data?.children;
+  if (!Array.isArray(children)) return [];
+  const results: import("./types").SubredditInfo[] = [];
+  for (const child of children) {
+    const item = asRecord(asRecord(child)?.data) ?? asRecord(child);
+    if (!item) continue;
+    const name = asString(item.display_name);
+    if (!name) continue;
+    const iconRaw = asString(item.community_icon) || asString(item.icon_img);
+    const icon = iconRaw && iconRaw.startsWith("http") ? decodeUrl(iconRaw) : undefined;
+    results.push({
+      name,
+      title: asString(item.title) ?? name,
+      subscribers: asNumber(item.subscribers) ?? 0,
+      nsfw: asBool(item.over18),
+      icon,
+    });
+  }
+  return results;
+}
+
+export function parsePostComments(raw: unknown): import("./types").RedditComment[] {
+  if (!Array.isArray(raw) || raw.length < 2) return [];
+  const commentsListing = asRecord(raw[1]);
+  const data = asRecord(commentsListing?.data);
+  const children = data?.children;
+  if (!Array.isArray(children)) return [];
+  const out: import("./types").RedditComment[] = [];
+  for (const child of children) {
+    const rec = asRecord(child);
+    if (asString(rec?.kind) !== "t1") continue;
+    const item = asRecord(rec?.data);
+    if (!item) continue;
+    const id = asString(item.id);
+    const body = asString(item.body);
+    const author = asString(item.author) ?? "[deleted]";
+    if (!id || !body || body === "[deleted]" || body === "[removed]" || author === "[deleted]") {
+      continue;
+    }
+    out.push({
+      id,
+      author,
+      body,
+      score: asNumber(item.score) ?? 0,
+      createdUtc: asNumber(item.created_utc) ?? 0,
+    });
+  }
+  return out;
 }

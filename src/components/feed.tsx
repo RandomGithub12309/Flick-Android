@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Search, X } from "lucide-react";
 import { ActionRail } from "@/components/action-rail";
+import { CommentsSheet } from "@/components/comments-sheet";
 import { PostSlide } from "@/components/post-slide";
-import { unsaveRedditPost } from "@/lib/reddit/loader";
+import { SubredditSearch } from "@/components/subreddit-search";
+import { refreshDeck } from "@/lib/feed/load";
+import { saveRedditPost, unsaveRedditPost } from "@/lib/reddit/loader";
+import type { FlickPost, SubredditSort } from "@/lib/reddit/types";
 import { useFlick } from "@/store/flick";
 
 const THRESHOLD = 72;
@@ -11,34 +16,45 @@ const THRESHOLD = 72;
  * broken media should surface as a message, not an infinite blur of slides.
  */
 const MAX_CONSECUTIVE_SKIPS = 8;
-const SKIP_SETTLE_MS = 400;
+const SKIP_SETTLE_MS = 380;
 const NOTICE_MS = 9000;
 
-function deckLabel(source: string): string {
-  return source === "saved" ? "Saved" : "Shuffle";
+function deckLabel(source: string, subreddit: string | null): string {
+  if (source === "saved") return "Saved";
+  if (source === "subreddit" && subreddit) return `r/${subreddit}`;
+  return "Shuffle";
 }
 
 export function Feed() {
   const posts = useFlick((s) => s.posts);
   const index = useFlick((s) => s.index);
   const muted = useFlick((s) => s.muted);
+  const autoAdvance = useFlick((s) => s.autoAdvance);
   const source = useFlick((s) => s.source);
+  const activeSubreddit = useFlick((s) => s.activeSubreddit);
   const session = useFlick((s) => s.session);
   const notice = useFlick((s) => s.notice);
   const setNotice = useFlick((s) => s.setNotice);
+  const setAutoAdvance = useFlick((s) => s.setAutoAdvance);
   const next = useFlick((s) => s.next);
   const prev = useFlick((s) => s.prev);
   const reroll = useFlick((s) => s.reroll);
   const removePost = useFlick((s) => s.removePost);
+  const insertPostAt = useFlick((s) => s.insertPostAt);
   const toggleMuted = useFlick((s) => s.toggleMuted);
   const signOut = useFlick((s) => s.signOut);
   const setScreen = useFlick((s) => s.setScreen);
 
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [drag, setDrag] = useState(0);
   const [animating, setAnimating] = useState(false);
   const [skipNotice, setSkipNotice] = useState<string | null>(null);
+  const [undoUnsave, setUndoUnsave] = useState<{ post: FlickPost; atIndex: number } | null>(null);
+
   const noticeTimer = useRef<number | null>(null);
+  const undoTimer = useRef<number | null>(null);
   const startY = useRef<number | null>(null);
   const lastY = useRef(0);
   const locked = useRef(false);
@@ -48,17 +64,17 @@ export function Feed() {
   const post = posts[index];
 
   const snap = useCallback(
-    (dir: -1 | 0 | 1, auto = false) => {
-      // Only deliberate navigation clears the run. An automatic skip changes
-      // the index as well, so resetting the counter on the index made the cap
-      // unreachable — every skip erased the evidence of the one before it and
-      // a dead feed could blur through itself forever.
+    (dir: -1 | 0 | 1, auto = false, pruneId?: string) => {
       if (!auto) skips.current = 0;
       setAnimating(true);
       if (dir === 1) {
         setDrag(-window.innerHeight);
         window.setTimeout(() => {
-          next();
+          if (pruneId) {
+            removePost(pruneId);
+          } else {
+            next();
+          }
           setAnimating(false);
           setDrag(0);
         }, 240);
@@ -75,32 +91,34 @@ export function Feed() {
       }
       if (dir !== 0 && navigator.vibrate) navigator.vibrate(8);
     },
-    [next, prev],
+    [next, prev, removePost],
   );
 
   useEffect(() => {
     return () => {
       if (skipTimer.current !== null) window.clearTimeout(skipTimer.current);
+      if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
     };
   }, []);
 
-  // A post that errors or never starts playing is skipped automatically. The
-  // timeout keeps a burst of simultaneous failures from stacking several
-  // snap() animations on the same index.
-  const skipUnplayable = useCallback(() => {
-    if (skipTimer.current !== null) return;
-    skips.current += 1;
-    if (skips.current > MAX_CONSECUTIVE_SKIPS) {
-      setSkipNotice("Skipped a run of unplayable posts — swipe to continue.");
-      skips.current = 0;
-      return;
-    }
-    skipTimer.current = window.setTimeout(() => {
-      skipTimer.current = null;
-      setSkipNotice("Skipped — couldn't play that one");
-      snap(1, true);
-    }, SKIP_SETTLE_MS);
-  }, [snap]);
+  // A post that errors or never starts playing is skipped and pruned from the deck.
+  const skipUnplayable = useCallback(
+    (deadId: string) => {
+      if (skipTimer.current !== null) return;
+      skips.current += 1;
+      if (skips.current > MAX_CONSECUTIVE_SKIPS) {
+        setSkipNotice("Skipped a run of unplayable posts — swipe to continue.");
+        skips.current = 0;
+        return;
+      }
+      skipTimer.current = window.setTimeout(() => {
+        skipTimer.current = null;
+        setSkipNotice("Skipped — couldn't play that one");
+        snap(1, true, deadId);
+      }, SKIP_SETTLE_MS);
+    },
+    [snap],
+  );
 
   useEffect(() => {
     if (!skipNotice) return;
@@ -117,8 +135,6 @@ export function Feed() {
     };
   }, [skipNotice]);
 
-  // A half-working mix still deserves to be watched, but the reason must not
-  // sit over the video forever — long enough to read, then out of the way.
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
@@ -127,6 +143,7 @@ export function Feed() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (searchOpen || commentsOpen) return;
       if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
         snap(1);
@@ -143,11 +160,11 @@ export function Feed() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reroll, snap, toggleMuted]);
+  }, [commentsOpen, reroll, searchOpen, snap, toggleMuted]);
 
   useEffect(() => {
     const onWheel = (e: WheelEvent) => {
-      if (locked.current || animating) return;
+      if (searchOpen || commentsOpen || locked.current || animating) return;
       if (Math.abs(e.deltaY) < 24) return;
       locked.current = true;
       snap(e.deltaY > 0 ? 1 : -1);
@@ -157,10 +174,10 @@ export function Feed() {
     };
     window.addEventListener("wheel", onWheel, { passive: true });
     return () => window.removeEventListener("wheel", onWheel);
-  }, [animating, snap]);
+  }, [animating, commentsOpen, searchOpen, snap]);
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (animating) return;
+    if (animating || searchOpen || commentsOpen) return;
     startY.current = e.clientY;
     lastY.current = e.clientY;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -178,6 +195,33 @@ export function Feed() {
     else if (dy > THRESHOLD) snap(-1);
     else snap(0);
   };
+
+  const openSubreddit = useCallback((subreddit: string, sort?: SubredditSort) => {
+    setSearchOpen(false);
+    void refreshDeck({ reddit: "subreddit", subreddit, sort }).catch((err) => {
+      useFlick.getState().setError(err instanceof Error ? err.message : "Could not load subreddit.");
+      useFlick.getState().setScreen("home");
+    });
+  }, []);
+
+  const handleShare = useCallback(async () => {
+    if (!post) return;
+    const url = post.permalink;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: post.title, url });
+        return;
+      } catch {
+        // User cancelled or share unavailable; fall back to clipboard.
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setSkipNotice("Link copied");
+    } catch {
+      setSkipNotice("Could not copy link");
+    }
+  }, [post]);
 
   if (!post) {
     return (
@@ -210,16 +254,21 @@ export function Feed() {
         <PostSlide
           key={`${item.id}-${i === index ? "a" : offset}`}
           post={item}
-          active={offset === 0 && !animating}
+          active={offset === 0 && !animating && !commentsOpen && !searchOpen}
           preload={offset === 1}
           muted={muted}
+          autoAdvance={autoAdvance}
           offset={offset}
           drag={drag}
           animating={animating || startY.current != null}
           uiVisible={controlsVisible}
+          onEnded={() => {
+            if (posts.length > 1) snap(1);
+          }}
+          onOpenSubreddit={(sub) => openSubreddit(sub)}
           onUnplayable={
             offset === 0 && !animating && (item.kind === "video" || Boolean(item.redgifsId))
-              ? skipUnplayable
+              ? () => skipUnplayable(item.id)
               : undefined
           }
         />
@@ -230,23 +279,40 @@ export function Feed() {
           <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-4 pt-safe">
             <div className="pointer-events-auto pt-3">
               <p className="text-xs font-medium uppercase tracking-widest text-fg/80">
-                {deckLabel(source)}
+                {deckLabel(source, activeSubreddit)}
               </p>
               <p className="tabular-nums text-sm text-muted">
                 {index + 1} / {posts.length}
               </p>
             </div>
-            <div className="pointer-events-auto mt-3 flex gap-2">
+            <div className="pointer-events-auto mt-3 flex items-center gap-1.5">
+              {session ? (
+                <button
+                  type="button"
+                  aria-label="Search subreddits"
+                  className="flex size-9 items-center justify-center rounded-full bg-bg/45 text-fg shadow-[var(--shadow-border)] backdrop-blur-sm"
+                  onClick={() => setSearchOpen(true)}
+                >
+                  <Search className="size-4" />
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="rounded-full bg-bg/40 px-3 py-2 text-sm text-fg shadow-[var(--shadow-border)]"
-                onClick={() => setControlsVisible(false)}
+                className="rounded-full bg-bg/45 px-2.5 py-1.5 text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm"
+                onClick={() => setAutoAdvance(!autoAdvance)}
               >
-                Hide UI
+                {autoAdvance ? "Auto" : "Loop"}
               </button>
               <button
                 type="button"
-                className="rounded-full bg-bg/40 px-3 py-2 text-sm text-fg shadow-[var(--shadow-border)]"
+                className="rounded-full bg-bg/45 px-2.5 py-1.5 text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm"
+                onClick={() => setControlsVisible(false)}
+              >
+                Hide
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-bg/45 px-2.5 py-1.5 text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm"
                 onClick={() => setScreen("home")}
               >
                 Close
@@ -274,18 +340,54 @@ export function Feed() {
             </div>
           ) : null}
 
+          {undoUnsave ? (
+            <div className="pointer-events-auto absolute inset-x-0 top-28 z-30 flex justify-center px-6">
+              <div className="flex items-center gap-3 rounded-full bg-bg/90 px-4 py-1.5 text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm">
+                <span>Unsaved</span>
+                <button
+                  type="button"
+                  className="font-semibold text-fg underline underline-offset-2"
+                  onClick={() => {
+                    const target = undoUnsave;
+                    setUndoUnsave(null);
+                    if (undoTimer.current !== null) {
+                      window.clearTimeout(undoTimer.current);
+                      undoTimer.current = null;
+                    }
+                    insertPostAt(target.post, target.atIndex);
+                    if (session) {
+                      void saveRedditPost(session, target.post.name).catch(() => {
+                        setSkipNotice("Could not re-save on Reddit");
+                      });
+                    }
+                  }}
+                >
+                  Undo
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <ActionRail
             muted={muted}
             permalink={post.permalink}
             sourceLabel="Reddit"
             onShuffle={reroll}
             onToggleMute={toggleMuted}
+            onComments={() => setCommentsOpen(true)}
+            onShare={() => void handleShare()}
             onUnsave={
               source === "saved" && session
                 ? () => {
                     const target = post;
+                    const atIndex = index;
                     removePost(target.id);
-                    setSkipNotice("Unsaved from Reddit");
+                    setUndoUnsave({ post: target, atIndex });
+                    if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+                    undoTimer.current = window.setTimeout(() => {
+                      undoTimer.current = null;
+                      setUndoUnsave(null);
+                    }, 4500);
                     void unsaveRedditPost(session, target.name).catch(() => {
                       setSkipNotice("Could not unsave on Reddit");
                     });
@@ -304,6 +406,36 @@ export function Feed() {
           onClick={() => setControlsVisible(true)}
         />
       )}
+
+      {commentsOpen ? <CommentsSheet post={post} onClose={() => setCommentsOpen(false)} /> : null}
+
+      {searchOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-bg/92 px-5 pt-safe backdrop-blur-md"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerMove={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={() => setSearchOpen(false)}
+        >
+          <div className="mx-auto w-full max-w-md pt-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-fg">Browse subreddits</h2>
+              <button
+                type="button"
+                aria-label="Close search"
+                onClick={() => setSearchOpen(false)}
+                className="flex size-9 items-center justify-center rounded-full bg-surface text-fg"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <SubredditSearch
+              onSelectSubreddit={(sub, sort) => openSubreddit(sub, sort)}
+              placeholder="Search any subreddit…"
+            />
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -1,5 +1,14 @@
-import { callDemoFeed, callRefreshGrant, callSavedPage, callUnsavePost } from "./api";
-import type { FlickPost, RedditSession, SavedPage } from "./types";
+import {
+  callDemoFeed,
+  callPostComments,
+  callRefreshGrant,
+  callSavedPage,
+  callSavePost,
+  callSearchSubreddits,
+  callSubredditFeed,
+  callUnsavePost,
+} from "./api";
+import type { FlickPost, RedditComment, RedditSession, SavedPage, SubredditInfo, SubredditSort } from "./types";
 import { useFlick } from "@/store/flick";
 
 /** Reddit access tokens live an hour; a shuffle must not start on a dead one. */
@@ -74,14 +83,77 @@ export async function loadSavedFeed(
   return initial;
 }
 
-/** Public mix of video subreddits — the lane available without signing in. */
-export async function loadDemoFeed(subreddits?: string[]): Promise<FlickPost[]> {
-  return callDemoFeed(subreddits);
+/** Public mix of video/image subreddits — the lane available without signing in. */
+export async function loadDemoFeed(subreddits?: string[], session?: RedditSession | null): Promise<FlickPost[]> {
+  let accessToken: string | undefined;
+  if (session) {
+    try {
+      accessToken = (await ensureFreshSession(session)).accessToken;
+    } catch {
+      accessToken = undefined;
+    }
+  }
+  return callDemoFeed(subreddits, accessToken);
+}
+
+export async function loadSubredditFeed(
+  subreddit: string,
+  sort: SubredditSort = "hot",
+  session?: RedditSession | null,
+): Promise<FlickPost[]> {
+  let accessToken: string | undefined;
+  if (session) {
+    try {
+      accessToken = (await ensureFreshSession(session)).accessToken;
+    } catch {
+      accessToken = undefined;
+    }
+  }
+  return callSubredditFeed({ subreddit, sort, accessToken });
+}
+
+export async function searchRedditSubreddits(
+  query: string,
+  session?: RedditSession | null,
+): Promise<SubredditInfo[]> {
+  let accessToken: string | undefined;
+  if (session) {
+    try {
+      accessToken = (await ensureFreshSession(session)).accessToken;
+    } catch {
+      accessToken = undefined;
+    }
+  }
+  return callSearchSubreddits({ query, accessToken });
+}
+
+export async function loadPostComments(
+  subreddit: string,
+  postId: string,
+  session?: RedditSession | null,
+): Promise<RedditComment[]> {
+  let accessToken: string | undefined;
+  if (session) {
+    try {
+      accessToken = (await ensureFreshSession(session)).accessToken;
+    } catch {
+      accessToken = undefined;
+    }
+  }
+  return callPostComments({ subreddit, postId, accessToken });
 }
 
 export async function unsaveRedditPost(session: RedditSession, fullname: string): Promise<void> {
   const current = await ensureFreshSession(session);
   await callUnsavePost({
+    accessToken: current.accessToken,
+    fullname,
+  });
+}
+
+export async function saveRedditPost(session: RedditSession, fullname: string): Promise<void> {
+  const current = await ensureFreshSession(session);
+  await callSavePost({
     accessToken: current.accessToken,
     fullname,
   });

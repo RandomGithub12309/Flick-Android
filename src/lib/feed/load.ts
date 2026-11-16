@@ -1,18 +1,21 @@
-import { loadDemoFeed, loadSavedFeed } from "@/lib/reddit/loader";
+import { loadDemoFeed, loadSavedFeed, loadSubredditFeed } from "@/lib/reddit/loader";
 import { useFlick } from "@/store/flick";
-import type { FlickPost } from "@/lib/reddit/types";
+import type { FlickPost, SubredditSort } from "@/lib/reddit/types";
 import type { FeedSource, MediaFilter } from "@/store/flick";
 
-export type RedditLane = "saved" | "demo";
+export type RedditLane = "saved" | "demo" | "subreddit";
 
 export type FeedRequest = {
-  /** Which Reddit feed to pull: the account's saves or the public mix. */
+  /** Which Reddit feed to pull: saved, public mix, or a specific subreddit. */
   reddit: RedditLane;
+  subreddit?: string;
+  sort?: SubredditSort;
 };
 
 export type FeedResult = {
   posts: FlickPost[];
   source: FeedSource;
+  subreddit?: string | null;
   notice: string | null;
 };
 
@@ -61,7 +64,15 @@ export async function loadDeck(
     return { posts: applyDeckFilters(raw, filterOpts), source: "saved", notice: null };
   }
 
-  const raw = await loadDemoFeed(state.customSubreddits);
+  if (reddit === "subreddit" && request.subreddit) {
+    const clean = request.subreddit.replace(/^\/?r\//i, "").trim();
+    const raw = await loadSubredditFeed(clean, request.sort ?? state.subredditSort, state.session);
+    const posts = applyDeckFilters(raw, filterOpts);
+    onProgress?.(posts.length);
+    return { posts, source: "subreddit", subreddit: clean, notice: null };
+  }
+
+  const raw = await loadDemoFeed(state.customSubreddits, state.session);
   const posts = applyDeckFilters(raw, filterOpts);
   onProgress?.(posts.length);
   return { posts, source: "demo", notice: null };
@@ -72,7 +83,12 @@ export async function refreshDeck(request?: Partial<FeedRequest>): Promise<boole
   const merged: FeedRequest = { ...defaultRequest(), ...request };
   store.setNotice(null);
 
-  const label = merged.reddit === "saved" ? "Pulling your saved posts…" : "Pulling the Reddit mix…";
+  const label =
+    merged.reddit === "saved"
+      ? "Pulling your saved posts…"
+      : merged.reddit === "subreddit" && merged.subreddit
+        ? `Loading r/${merged.subreddit.replace(/^\/?r\//i, "")}…`
+        : "Pulling the Reddit mix…";
   store.setLoading(label, 0);
 
   const result = await loadDeck(merged, (count) =>
@@ -85,7 +101,7 @@ export async function refreshDeck(request?: Partial<FeedRequest>): Promise<boole
     );
     return false;
   }
-  store.setPosts(result.posts, result.source);
+  store.setPosts(result.posts, result.source, result.subreddit ?? null);
   store.setNotice(result.notice);
   return true;
 }

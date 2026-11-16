@@ -45,6 +45,10 @@ export type PlaybackInfo = {
 export type VideoHandle = {
   /** Jump to `ratio` (0..1) of the timeline. A no-op until the duration is known. */
   seek: (ratio: number) => void;
+  /** Jump relative by `deltaSeconds` (e.g. -5 or +5). */
+  seekBy: (deltaSeconds: number) => void;
+  /** Set playback speed (e.g. 1 or 2 for hold-to-2x). */
+  setPlaybackRate: (rate: number) => void;
   /** Toggle pause/play on user tap. */
   togglePlay: () => void;
 };
@@ -54,6 +58,7 @@ type Props = {
   active: boolean;
   preload?: boolean;
   muted: boolean;
+  autoAdvance?: boolean;
   /** Still frame shown behind the video as a blurred backdrop. */
   poster?: string;
   /** Hide playback UI while leaving the video itself visible. */
@@ -61,10 +66,23 @@ type Props = {
   onProgress?: (info: PlaybackInfo) => void;
   /** Fired once per activation when this video can't be played at all. */
   onUnplayable?: () => void;
+  /** Fired when the video finishes playing and `autoAdvance` is enabled. */
+  onEnded?: () => void;
 };
 
 export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
-  { video, active, preload = false, muted, poster, uiVisible = true, onProgress, onUnplayable },
+  {
+    video,
+    active,
+    preload = false,
+    muted,
+    autoAdvance = false,
+    poster,
+    uiVisible = true,
+    onProgress,
+    onUnplayable,
+    onEnded,
+  },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -174,6 +192,25 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
           // The timeupdate sync pulls it back in line once it can seek.
         }
       },
+      seekBy(deltaSeconds: number) {
+        const el = videoRef.current;
+        if (!el) return;
+        const duration = effectiveDuration(el.duration, seekableEndOf(el));
+        const max = duration > 0 ? duration : el.currentTime + Math.max(0, deltaSeconds);
+        const time = Math.min(max, Math.max(0, el.currentTime + deltaSeconds));
+        el.currentTime = time;
+        try {
+          if (audioRef.current) audioRef.current.currentTime = time;
+        } catch {
+          // Ignore seek error before metadata
+        }
+      },
+      setPlaybackRate(rate: number) {
+        const el = videoRef.current;
+        if (!el) return;
+        el.playbackRate = rate;
+        if (audioRef.current) audioRef.current.playbackRate = rate;
+      },
       togglePlay() {
         const el = videoRef.current;
         const audio = audioRef.current;
@@ -271,6 +308,9 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         syncAudio();
         publish();
       }),
+      on("ended", () => {
+        if (activeRef.current && autoAdvance) onEnded?.();
+      }),
       on("error", () => {
         if (!advanceSource()) reportUnplayable("error");
       }),
@@ -287,7 +327,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       offs.forEach((off) => off());
       audio?.removeEventListener("loadedmetadata", onLoadedAudio);
     };
-  }, [advanceSource, audioUrl, clearStartTimer, onProgress, reportUnplayable, source]);
+  }, [advanceSource, audioUrl, autoAdvance, clearStartTimer, onEnded, onProgress, reportUnplayable, source]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -311,7 +351,9 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     }
     if (!active) {
       el.pause();
+      el.playbackRate = 1;
       audio?.pause();
+      if (audio) audio.playbackRate = 1;
       blockedRef.current = false;
       userPausedRef.current = false;
       setBlocked(false);
@@ -361,6 +403,22 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     };
   }, [active, paused]);
 
+  // Pause playback when app goes to background.
+  useEffect(() => {
+    if (!active) return;
+    const onVisibility = () => {
+      if (document.hidden) {
+        videoRef.current?.pause();
+        audioRef.current?.pause();
+      } else if (!userPausedRef.current && activeRef.current) {
+        void videoRef.current?.play().catch(() => undefined);
+        if (audioRef.current && !muted) void audioRef.current.play().catch(() => undefined);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [active, muted]);
+
   useEffect(() => {
     if (!active) {
       clearStartTimer();
@@ -394,7 +452,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         src={source}
         poster={poster}
         playsInline
-        loop
+        loop={!autoAdvance}
         autoPlay={active}
         muted={muted}
         preload={active || preload ? "auto" : "metadata"}
@@ -446,7 +504,12 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         </button>
       ) : null}
       {audioUrl ? (
-        <audio ref={audioRef} src={audioUrl} loop preload={active || preload ? "auto" : "none"} />
+        <audio
+          ref={audioRef}
+          src={audioUrl}
+          loop={!autoAdvance}
+          preload={active || preload ? "auto" : "none"}
+        />
       ) : null}
     </div>
   );

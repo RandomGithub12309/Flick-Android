@@ -1,7 +1,13 @@
-import { parseListingChildren, parseRedditPost, redgifsIdFromPost } from "./parse";
+import {
+  parseListingChildren,
+  parsePostComments,
+  parseRedditPost,
+  parseSubredditSearch,
+  redgifsIdFromPost,
+} from "./parse";
 import { isValidRedgifsId, normalizeRedgifsId, redgifsProxyUrl } from "./redgifs";
 import { audioCandidatesFor } from "../video-sources";
-import type { FlickPost, SavedPage } from "./types";
+import type { FlickPost, RedditComment, SavedPage, SubredditInfo, SubredditSort } from "./types";
 
 const USER_AGENT = "android:app.flick.saved:1.0.0 (by /u/flick-player)";
 const TOKEN_URL = "https://www.reddit.com/api/v1/access_token";
@@ -553,6 +559,101 @@ export async function unsavePost(input: {
   if (!res.ok) {
     throw new Error(`Could not unsave post (${res.status})`);
   }
+}
+
+export async function savePost(input: {
+  accessToken: string;
+  fullname: string;
+}): Promise<void> {
+  const res = await fetch(`${OAUTH}/api/save`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.accessToken}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": USER_AGENT,
+    },
+    body: new URLSearchParams({ id: input.fullname }),
+  });
+  if (res.status === 401) {
+    throw new Error("Reddit session expired. Sign in again.");
+  }
+  if (!res.ok) {
+    throw new Error(`Could not save post (${res.status})`);
+  }
+}
+
+export async function fetchSubredditFeed(input: {
+  subreddit: string;
+  sort?: SubredditSort;
+  accessToken?: string;
+}): Promise<FlickPost[]> {
+  const clean = input.subreddit.replace(/^\/?r\//i, "").trim();
+  if (!clean) return [];
+  const sort = input.sort ?? "hot";
+  const params = new URLSearchParams({ limit: "40", raw_json: "1", include_over_18: "1" });
+  if (sort === "top") params.set("t", "week");
+
+  let posts: FlickPost[] = [];
+  if (input.accessToken) {
+    try {
+      const json = await oauthGet(`/r/${encodeURIComponent(clean)}/${sort}?${params.toString()}`, input.accessToken);
+      posts = parseListingChildren(json).posts;
+    } catch {
+      // fall through
+    }
+  }
+  if (posts.length === 0) {
+    const res = await fetch(`https://www.reddit.com/r/${encodeURIComponent(clean)}/${sort}.json?${params.toString()}`, {
+      headers: { "User-Agent": USER_AGENT, Cookie: "over18=1" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      posts = parseListingChildren(await res.json()).posts;
+    }
+  }
+  return resolveExternalVideos(posts);
+}
+
+export async function searchSubreddits(input: {
+  query: string;
+  accessToken?: string;
+}): Promise<SubredditInfo[]> {
+  const q = input.query.trim().replace(/^\/?r\//i, "");
+  if (!q) return [];
+  const params = new URLSearchParams({ q, limit: "10", include_over_18: "1", raw_json: "1" });
+  if (input.accessToken) {
+    const json = await oauthGet(`/subreddits/search?${params.toString()}`, input.accessToken);
+    return parseSubredditSearch(json);
+  }
+  const res = await fetch(`https://www.reddit.com/subreddits/search.json?${params.toString()}`, {
+    headers: { "User-Agent": USER_AGENT, Cookie: "over18=1" },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) return [];
+  return parseSubredditSearch(await res.json());
+}
+
+export async function fetchComments(input: {
+  subreddit: string;
+  postId: string;
+  accessToken?: string;
+}): Promise<RedditComment[]> {
+  const sub = encodeURIComponent(input.subreddit.replace(/^\/?r\//i, ""));
+  const id = encodeURIComponent(input.postId);
+  if (input.accessToken) {
+    try {
+      const json = await oauthGet(`/r/${sub}/comments/${id}?limit=30&depth=1&sort=top&raw_json=1`, input.accessToken);
+      return parsePostComments(json);
+    } catch {
+      // fall through
+    }
+  }
+  const res = await fetch(`https://www.reddit.com/r/${sub}/comments/${id}.json?limit=30&depth=1&sort=top&raw_json=1`, {
+    headers: { "User-Agent": USER_AGENT, Cookie: "over18=1" },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) return [];
+  return parsePostComments(await res.json());
 }
 
 const FALLBACK_POSTS: FlickPost[] = [

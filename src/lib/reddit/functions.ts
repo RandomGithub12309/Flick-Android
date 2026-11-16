@@ -77,6 +77,56 @@ export const redditUnsave = createServerFn({ method: "POST" })
     return unsavePost(data);
   });
 
+export const redditSave = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      accessToken: z.string().min(8),
+      fullname: z.string().min(3),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const { savePost } = await import("./reddit.server");
+    return savePost(data);
+  });
+
+export const redditSubredditFeed = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      subreddit: z.string().min(1),
+      sort: z.enum(["hot", "top", "new"]).optional(),
+      accessToken: z.string().optional(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const { fetchSubredditFeed } = await import("./reddit.server");
+    return fetchSubredditFeed(data);
+  });
+
+export const redditSearchSubreddits = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      query: z.string().min(1),
+      accessToken: z.string().optional(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const { searchSubreddits } = await import("./reddit.server");
+    return searchSubreddits(data);
+  });
+
+export const redditComments = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      subreddit: z.string().min(1),
+      postId: z.string().min(1),
+      accessToken: z.string().optional(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const { fetchComments } = await import("./reddit.server");
+    return fetchComments(data);
+  });
+
 /**
  * One-shot lookup of a redgifs clip, used when a slide has no playable file
  * (the feed-level lookup failed, or the post is a bare link) or when playback
