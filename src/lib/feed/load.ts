@@ -121,7 +121,21 @@ export async function loadDeck(
         }
       },
     });
-    return { posts: applyDeckFilters(raw, filterOpts), source: "twitter", notice: null };
+    const posts = applyDeckFilters(raw, filterOpts);
+    let notice: string | null = null;
+    if (raw.length > posts.length && posts.length <= 2) {
+      const nsfwHidden = !filterOpts.showNsfw && raw.some((p) => p.nsfw);
+      const nonVideoHidden =
+        filterOpts.mediaFilter === "video" && raw.some((p) => p.kind !== "video" && !p.redgifsId);
+      if (nsfwHidden && nonVideoHidden) {
+        notice = `Pulled ${raw.length} X bookmarks; ${posts.length} shown (enable NSFW posts or All media in Sources & Filters).`;
+      } else if (nsfwHidden) {
+        notice = `Pulled ${raw.length} X bookmarks; ${posts.length} shown (others marked sensitive — enable NSFW posts in Sources & Filters).`;
+      } else if (nonVideoHidden) {
+        notice = `Pulled ${raw.length} X bookmarks; ${posts.length} video${posts.length === 1 ? "" : "s"} (switch to All media in Sources & Filters to see photos).`;
+      }
+    }
+    return { posts, source: "twitter", notice };
   }
 
   if (platform === "mix" && state.twitterSession) {
