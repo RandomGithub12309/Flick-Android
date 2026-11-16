@@ -237,7 +237,7 @@ public final class LocalServer {
             if (contentRange != null) headers.append("Content-Range: ").append(contentRange).append("\r\n");
             if (etag != null) headers.append("ETag: ").append(etag).append("\r\n");
             if (lastModified != null) headers.append("Last-Modified: ").append(lastModified).append("\r\n");
-            headers.append("Cache-Control: private, max-age=600\r\n");
+            headers.append("Cache-Control: no-store\r\n");
             headers.append("Access-Control-Allow-Origin: *\r\n");
             headers.append("Connection: close\r\n\r\n");
 

@@ -436,14 +436,14 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [active, muted]);
 
-  // Recover if the active stream stalls with no time progress for 5 seconds.
+  // Recover if the active stream stalls with no time progress for 3 seconds.
   useEffect(() => {
     if (!active || paused || blocked) return;
     const el = videoRef.current;
     if (!el) return;
     let lastTime = el.currentTime;
     let stalledTicks = 0;
-    let retriedLoad = false;
+    let reloadAttempts = 0;
 
     const id = window.setInterval(() => {
       if (!activeRef.current || userPausedRef.current || blockedRef.current) return;
@@ -455,15 +455,16 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       if (Math.abs(el.currentTime - lastTime) > 0.05) {
         lastTime = el.currentTime;
         stalledTicks = 0;
+        reloadAttempts = 0;
         setBuffering(false);
         return;
       }
       stalledTicks += 1;
-      if (stalledTicks >= 5) {
+      if (stalledTicks >= 3) {
         stalledTicks = 0;
         if (advanceSource()) return;
-        if (!retriedLoad) {
-          retriedLoad = true;
+        if (reloadAttempts < 2) {
+          reloadAttempts += 1;
           const resumeAt = el.currentTime;
           try {
             el.load();
@@ -472,12 +473,18 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
           } catch {
             // Ignore reload errors
           }
+          return;
+        }
+        if (el.currentTime <= 0.1 && el.readyState < 3 && !reported.current) {
+          reported.current = true;
+          clearStartTimer();
+          onUnplayableRef.current?.();
         }
       }
     }, 1000);
 
     return () => window.clearInterval(id);
-  }, [active, advanceSource, blocked, paused, source]);
+  }, [active, advanceSource, blocked, clearStartTimer, paused, source]);
 
   useEffect(() => {
     if (!active) {
