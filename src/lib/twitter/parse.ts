@@ -166,7 +166,7 @@ export function parseTweetResult(raw: unknown): FlickPost | null {
   const media = extractMediaFromLegacy(legacy);
   if (media.kind === "text" || media.kind === "link") {
     // Keep text-only/link tweets out only if caller filters; FlickPost supports them too,
-    // matching Reddit's media-focused deck by skipping non-media tweets unless quoted media exists.
+    // matching Reddit's media-focused deck by skipping non-media tweets unless quoted/retweeted media exists.
     const quoted = asRecord(asRecord(tweet.quoted_status_result)?.result);
     if (quoted) {
       const qPost = parseTweetResult(quoted);
@@ -178,6 +178,19 @@ export function parseTweetResult(raw: unknown): FlickPost | null {
           platform: "twitter",
           title: `${title}\n\n@${qPost.author}: ${qPost.title}`,
           author: screenName,
+          permalink: `https://x.com/${screenName}/status/${id}`,
+        };
+      }
+    }
+    const retweeted = asRecord(asRecord(legacy.retweeted_status_result)?.result);
+    if (retweeted) {
+      const rtPost = parseTweetResult(retweeted);
+      if (rtPost && (rtPost.kind === "video" || rtPost.kind === "image" || rtPost.kind === "gallery")) {
+        return {
+          ...rtPost,
+          id,
+          name: `x_${id}`,
+          platform: "twitter",
           permalink: `https://x.com/${screenName}/status/${id}`,
         };
       }
@@ -215,7 +228,9 @@ function extractTimelineInstructions(instructions: unknown[]): {
   for (const instr of instructions) {
     const rec = asRecord(instr);
     if (!rec) continue;
-    const entries = asArray(rec.entries);
+    const entries = [...asArray(rec.entries)];
+    if (rec.entry) entries.push(rec.entry);
+
     for (const entry of entries) {
       const eRec = asRecord(entry);
       if (!eRec) continue;
@@ -223,13 +238,17 @@ function extractTimelineInstructions(instructions: unknown[]): {
       const content = asRecord(eRec.content);
       if (!content) continue;
 
-      if (entryId.startsWith("cursor-bottom-") || content.cursorType === "Bottom") {
-        const val = asString(content.value);
+      const itemContent = asRecord(content.itemContent);
+      if (
+        entryId.startsWith("cursor-bottom-") ||
+        content.cursorType === "Bottom" ||
+        itemContent?.cursorType === "Bottom"
+      ) {
+        const val = asString(content.value) || asString(itemContent?.value);
         if (val) cursor = val;
         continue;
       }
 
-      const itemContent = asRecord(content.itemContent);
       const tweetRes = asRecord(itemContent?.tweet_results)?.result;
       if (tweetRes) {
         const parsed = parseTweetResult(tweetRes);

@@ -8,8 +8,8 @@ import {
 import type { TwitterSession } from "./types";
 import type { FlickPost, RedditComment } from "@/lib/reddit/types";
 
-const MAX_BOOKMARK_PAGES = 6;
-const FAST_START_PAGES = 1;
+const MAX_BOOKMARK_PAGES = 10;
+const FAST_START_PAGES = 3;
 
 export async function loadTwitterBookmarks(
   session: TwitterSession,
@@ -20,23 +20,27 @@ export async function loadTwitterBookmarks(
 ): Promise<FlickPost[]> {
   const initial: FlickPost[] = [];
   let cursor: string | null = null;
+  let pagesFetched = 0;
 
   for (let i = 0; i < FAST_START_PAGES; i++) {
     const page = await fetchTwitterBookmarksPage(session, cursor, 40);
+    pagesFetched += 1;
     initial.push(...page.posts);
     options?.onCount?.(initial.length);
     cursor = page.cursor;
-    if (!cursor || page.posts.length === 0) break;
+    if (!cursor || initial.length >= 25) break;
   }
 
   if (cursor) {
     void (async () => {
       let nextCursor: string | null = cursor;
-      for (let i = FAST_START_PAGES; i < MAX_BOOKMARK_PAGES && nextCursor; i++) {
+      for (let i = pagesFetched; i < MAX_BOOKMARK_PAGES && nextCursor; i++) {
         try {
           const page = await fetchTwitterBookmarksPage(session, nextCursor, 40);
-          if (page.posts.length === 0) break;
-          options?.onMore?.(page.posts);
+          if (page.posts.length > 0) {
+            options?.onMore?.(page.posts);
+          }
+          if (!page.cursor || page.cursor === nextCursor) break;
           nextCursor = page.cursor;
         } catch {
           break;

@@ -389,9 +389,19 @@ public class TwitterAuthPlugin extends Plugin {
             Uri.Builder builder = uri.buildUpon().clearQuery();
             for (String name : uri.getQueryParameterNames()) {
                 if ("variables".equals(name)) {
-                    JSONObject vars = new JSONObject();
+                    String origVars = uri.getQueryParameter(name);
+                    JSONObject vars;
+                    try {
+                        vars = (origVars != null && !origVars.isEmpty())
+                                ? new JSONObject(origVars)
+                                : new JSONObject();
+                    } catch (Exception ignored) {
+                        vars = new JSONObject();
+                    }
                     vars.put("count", 40);
-                    vars.put("includePromotedContent", false);
+                    if (!vars.has("includePromotedContent")) {
+                        vars.put("includePromotedContent", false);
+                    }
                     if (cursor != null && !cursor.isEmpty()) {
                         vars.put("cursor", cursor);
                     }
