@@ -14,7 +14,31 @@ import {
   parseUserMediaTimeline,
 } from "./parse";
 import type { TwitterPage, TwitterSession } from "./types";
-import type { RedditComment } from "@/lib/reddit/types";
+import { ensureLocalServer } from "@/lib/reddit/native-server";
+import type { FlickPost, RedditComment } from "@/lib/reddit/types";
+
+function proxifyTwitterVideoUrl(url: string | undefined, origin: string): string | undefined {
+  if (!url || !origin) return url;
+  if (url.startsWith("https://video.twimg.com/") || url.startsWith("https://pbs.twimg.com/")) {
+    return `${origin}/api/twitter/video?url=${encodeURIComponent(url)}`;
+  }
+  return url;
+}
+
+function proxifyTwitterPosts(posts: FlickPost[], origin: string): FlickPost[] {
+  if (!origin) return posts;
+  return posts.map((post) => {
+    if (!post.video) return post;
+    return {
+      ...post,
+      video: {
+        ...post.video,
+        url: proxifyTwitterVideoUrl(post.video.url, origin) ?? post.video.url,
+        fallbackUrl: proxifyTwitterVideoUrl(post.video.fallbackUrl, origin),
+      },
+    };
+  });
+}
 
 function parseJson(data: unknown): Record<string, unknown> {
   if (data && typeof data === "object") return data as Record<string, unknown>;
@@ -164,6 +188,7 @@ export async function fetchTwitterBookmarksPage(
           : res.error || `X request failed (${res.status}).`,
       );
     }
+    const origin = await ensureLocalServer();
     const json = parseJson(res.body);
     const parsed = parseBookmarksTimeline(json);
     const resolvedUsername =
@@ -171,7 +196,7 @@ export async function fetchTwitterBookmarksPage(
         ? session.username
         : res.screenName?.trim() || session.username;
     return {
-      posts: parsed.posts,
+      posts: proxifyTwitterPosts(parsed.posts, origin),
       cursor: parsed.cursor,
       username: resolvedUsername,
     };
@@ -228,9 +253,10 @@ export async function fetchTwitterUserMedia(
     },
     includeFeatures: true,
   });
+  const origin = await ensureLocalServer();
   const parsed = parseUserMediaTimeline(mediaJson);
   return {
-    posts: parsed.posts,
+    posts: proxifyTwitterPosts(parsed.posts, origin),
     cursor: parsed.cursor,
     username: clean,
   };
