@@ -301,22 +301,11 @@ export function ConnectForm() {
           X (Twitter) bookmarks
         </h2>
         <div className="flex flex-col gap-2">
-          <Button
-            type="button"
-            size="lg"
-            variant={isNativeTwitterAuthSupported() ? "secondary" : "primary"}
-            className="w-full"
-            disabled={twitterBusy}
-            onClick={() => void openExternalX()}
-          >
-            <ExternalLink className="mr-2 size-4" />
-            Sign in via external browser
-          </Button>
           {isNativeTwitterAuthSupported() ? (
             <Button
               type="button"
-              size="md"
-              variant="ghost"
+              size="lg"
+              variant="primary"
               className="w-full"
               disabled={twitterBusy}
               onClick={() => void connectTwitterWebView()}
@@ -324,11 +313,23 @@ export function ConnectForm() {
               {twitterBusy
                 ? "Waiting for X sign-in…"
                 : twitterSession
-                  ? "Reconnect X in WebView (in-app)"
-                  : "Sign in with X (in-app WebView)"}
+                  ? "Reconnect X"
+                  : "Sign in with X"}
             </Button>
           ) : null}
+          <Button
+            type="button"
+            size={isNativeTwitterAuthSupported() ? "md" : "lg"}
+            variant={isNativeTwitterAuthSupported() ? "ghost" : "primary"}
+            className="w-full"
+            disabled={twitterBusy}
+            onClick={() => void openExternalX()}
+          >
+            <ExternalLink className="mr-2 size-4" />
+            Sign in via external browser
+          </Button>
         </div>
+        {!showManualX && error ? <p className="text-sm text-danger">{error}</p> : null}
         <button
           type="button"
           className="self-start text-left text-xs text-muted underline-offset-4 hover:underline"

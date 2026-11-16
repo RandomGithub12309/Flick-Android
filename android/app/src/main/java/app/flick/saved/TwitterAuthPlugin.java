@@ -1,5 +1,6 @@
 package app.flick.saved;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Dialog;
 import android.graphics.Bitmap;
@@ -12,6 +13,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -22,10 +24,13 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONObject;
 
@@ -36,7 +41,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * In-app WebView login for X (Twitter) so Flick can read the user's own
  * `auth_token` and `ct0` session cookies without any paid API key.
  */
-@CapacitorPlugin(name = "TwitterAuth")
+@CapacitorPlugin(
+        name = "TwitterAuth",
+        permissions = {
+                @Permission(strings = { Manifest.permission.CAMERA }, alias = "camera")
+        }
+)
 public class TwitterAuthPlugin extends Plugin {
     private static final String CHROME_MOBILE_UA =
             "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
@@ -50,6 +60,20 @@ public class TwitterAuthPlugin extends Plugin {
     @SuppressLint("SetJavaScriptEnabled")
     @PluginMethod
     public void login(PluginCall call) {
+        if (getPermissionState("camera") != PermissionState.GRANTED) {
+            requestPermissionForAlias("camera", call, "cameraPermsCallback");
+            return;
+        }
+        openLoginWebView(call);
+    }
+
+    @PermissionCallback
+    private void cameraPermsCallback(PluginCall call) {
+        openLoginWebView(call);
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void openLoginWebView(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             Dialog dialog = new Dialog(getActivity(), android.R.style.Theme_Black_NoTitleBar_Fullscreen);
             LinearLayout root = new LinearLayout(getActivity());
@@ -146,7 +170,12 @@ public class TwitterAuthPlugin extends Plugin {
                 }
             };
 
-            webView.setWebChromeClient(new WebChromeClient());
+            webView.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public void onPermissionRequest(final PermissionRequest request) {
+                    getActivity().runOnUiThread(() -> request.grant(request.getResources()));
+                }
+            });
             webView.setWebViewClient(new WebViewClient() {
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
