@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { ActionRail } from "@/components/action-rail";
 import { CommentsSheet } from "@/components/comments-sheet";
+import { CreatorHistorySheet } from "@/components/creator-history-sheet";
 import { PostSlide } from "@/components/post-slide";
 import { SubredditSearch } from "@/components/subreddit-search";
 import { refreshDeck } from "@/lib/feed/load";
@@ -23,6 +24,7 @@ const NOTICE_MS = 9000;
 function deckLabel(
   source: string,
   subreddit: string | null,
+  redditUser: string | null,
   twitterUser: string | null,
 ): string {
   if (source === "mix") return "Mix";
@@ -31,6 +33,7 @@ function deckLabel(
   if (source === "pornhub") return "Pornhub";
   if (source === "pornhub-saved") return "Saved PH";
   if (source === "saved") return "Saved";
+  if (source === "reddit-user" && redditUser) return `u/${redditUser}`;
   if (source === "subreddit" && subreddit) return `r/${subreddit}`;
   return "Shuffle";
 }
@@ -42,6 +45,7 @@ export function Feed() {
   const autoAdvance = useFlick((s) => s.autoAdvance);
   const source = useFlick((s) => s.source);
   const activeSubreddit = useFlick((s) => s.activeSubreddit);
+  const activeRedditUser = useFlick((s) => s.activeRedditUser);
   const activeTwitterUser = useFlick((s) => s.activeTwitterUser);
   const session = useFlick((s) => s.session);
   const twitterSession = useFlick((s) => s.twitterSession);
@@ -64,6 +68,9 @@ export function Feed() {
   const [controlsVisible, setControlsVisible] = useState(true);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [creatorSheet, setCreatorSheet] = useState<{ author: string; authorUrl?: string } | null>(
+    null,
+  );
   const [animating, setAnimating] = useState(false);
   const [skipNotice, setSkipNotice] = useState<string | null>(null);
   const [undoUnsave, setUndoUnsave] = useState<{ post: FlickPost; atIndex: number } | null>(null);
@@ -247,14 +254,25 @@ export function Feed() {
 
   const openSubreddit = useCallback((subreddit: string, sort?: SubredditSort) => {
     setSearchOpen(false);
+    setCreatorSheet(null);
     void refreshDeck({ reddit: "subreddit", subreddit, sort }).catch((err) => {
       useFlick.getState().setError(err instanceof Error ? err.message : "Could not load subreddit.");
       useFlick.getState().setScreen("home");
     });
   }, []);
 
+  const openRedditUser = useCallback((username: string) => {
+    setSearchOpen(false);
+    setCreatorSheet(null);
+    void refreshDeck({ reddit: "demo", redditUser: username }).catch((err) => {
+      useFlick.getState().setError(err instanceof Error ? err.message : "Could not load Reddit user.");
+      useFlick.getState().setScreen("home");
+    });
+  }, []);
+
   const openTwitterUser = useCallback((username: string) => {
     setSearchOpen(false);
+    setCreatorSheet(null);
     void refreshDeck({ reddit: "demo", twitterUser: username }).catch((err) => {
       useFlick.getState().setError(err instanceof Error ? err.message : "Could not load X user.");
       useFlick.getState().setScreen("home");
@@ -321,7 +339,7 @@ export function Feed() {
           <PostSlide
             key={posts.length >= 3 ? item.id : `${item.id}-${offset}`}
             post={item}
-            active={offset === 0 && !animating && !commentsOpen && !searchOpen}
+            active={offset === 0 && !animating && !commentsOpen && !searchOpen && !creatorSheet}
             preload={offset === 1}
             muted={muted}
             autoAdvance={autoAdvance}
@@ -332,7 +350,9 @@ export function Feed() {
               if (posts.length > 1) snap(1);
             }}
             onOpenSubreddit={(sub) => openSubreddit(sub)}
+            onOpenRedditUser={(user) => openRedditUser(user)}
             onOpenTwitterUser={(user) => openTwitterUser(user)}
+            onOpenPornhubCreator={(author, authorUrl) => setCreatorSheet({ author, authorUrl })}
             onUnplayable={
               offset === 0 &&
               !animating &&
@@ -349,7 +369,7 @@ export function Feed() {
           <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-4 pt-safe">
             <div className="pointer-events-auto pt-3">
               <p className="text-xs font-medium uppercase tracking-widest text-fg/80">
-                {deckLabel(source, activeSubreddit, activeTwitterUser)}
+                {deckLabel(source, activeSubreddit, activeRedditUser, activeTwitterUser)}
               </p>
               <p className="tabular-nums text-sm text-muted">
                 {index + 1} / {posts.length}
@@ -593,9 +613,25 @@ export function Feed() {
                 setSearchOpen(false);
                 setPosts(phPosts, "pornhub", null, null, startIndex);
               }}
+              onOpenPornhubCreator={(author, authorUrl) => {
+                setSearchOpen(false);
+                setCreatorSheet({ author, authorUrl });
+              }}
             />
           </div>
         </div>
+      ) : null}
+
+      {creatorSheet ? (
+        <CreatorHistorySheet
+          author={creatorSheet.author}
+          authorUrl={creatorSheet.authorUrl}
+          onClose={() => setCreatorSheet(null)}
+          onPlay={(phPosts, startIndex) => {
+            setCreatorSheet(null);
+            setPosts(phPosts, "pornhub", null, null, startIndex);
+          }}
+        />
       ) : null}
     </section>
   );

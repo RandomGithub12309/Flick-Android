@@ -435,6 +435,71 @@ export async function nativeFetchSubredditFeed(input: {
   return resolveExternalVideos(raw);
 }
 
+export async function nativeFetchUserFeed(input: {
+  username: string;
+  accessToken?: string;
+}): Promise<FlickPost[]> {
+  const clean = input.username.replace(/^\/?u\//i, "").trim();
+  if (!clean || clean === "[deleted]") return [];
+  const params = new URLSearchParams({
+    limit: "50",
+    raw_json: "1",
+    include_over_18: "1",
+    sort: "new",
+  });
+
+  if (input.accessToken) {
+    try {
+      const json = await oauthGet(
+        `/user/${encodeURIComponent(clean)}/submitted?${params.toString()}`,
+        input.accessToken,
+      );
+      const posts = parseListingChildren(json).posts;
+      if (posts.length > 0) return resolveExternalVideos(posts);
+    } catch {
+      // Fall through to public Reddit JSON.
+    }
+  }
+
+  try {
+    const res = await CapacitorHttp.request({
+      url: `https://www.reddit.com/user/${encodeURIComponent(clean)}/submitted.json?${params.toString()}`,
+      method: "GET",
+      headers: {
+        "User-Agent": USER_AGENT,
+        Cookie: "over18=1",
+      },
+      connectTimeout: 8000,
+      readTimeout: 8000,
+    });
+    if (res.status >= 200 && res.status < 300) {
+      const json = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+      const posts = parseListingChildren(json).posts;
+      if (posts.length > 0) return resolveExternalVideos(posts);
+    }
+  } catch {
+    // Fall back to Arctic Shift if Reddit public JSON is unreachable.
+  }
+
+  const url = `https://arctic-shift.photon-reddit.com/api/posts/search?author=${encodeURIComponent(clean)}&limit=50&sort=desc&sort_type=created_utc`;
+  const res = await CapacitorHttp.request({
+    url,
+    method: "GET",
+    headers: { "User-Agent": USER_AGENT },
+    connectTimeout: 8000,
+    readTimeout: 8000,
+  });
+  if (res.status < 200 || res.status >= 300) throw new Error(String(res.status));
+  const json = (typeof res.data === "string" ? JSON.parse(res.data) : res.data) as {
+    data?: unknown[];
+  };
+  const rows = Array.isArray(json?.data) ? json.data : [];
+  const parsed = rows
+    .map((row) => parseRedditPost({ kind: "t3", data: row }))
+    .filter((p): p is FlickPost => p !== null);
+  return resolveExternalVideos(parsed);
+}
+
 export async function nativeSearchSubreddits(input: {
   query: string;
   accessToken?: string;

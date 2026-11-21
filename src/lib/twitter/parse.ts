@@ -98,20 +98,30 @@ function extractMediaFromLegacy(legacy: UnknownRecord): {
       .filter((v): v is UnknownRecord => v !== null && v.content_type === "video/mp4" && typeof v.url === "string")
       .sort((a, b) => asNumber(b.bitrate) - asNumber(a.bitrate));
 
-    const best = variants[0];
-    if (best) {
+    if (variants.length > 0) {
+      // On mobile screens, X's ~2.1Mbps 720p/1080p MP4 looks sharp and starts 4-5x faster
+      // than 6-25Mbps 1080p60/4K uploads. Prefer the best variant <= 3.5Mbps (>= 700kbps),
+      // falling back to the highest available bitrate if none sits in that sweet spot.
+      const preferred =
+        variants.find((v) => {
+          const br = asNumber(v.bitrate);
+          return br >= 700_000 && br <= 3_500_000;
+        }) ?? variants[0]!;
+
+      const bestUrl = asString(preferred.url);
+      const fallbackUrls = variants
+        .filter((v) => v !== preferred)
+        .map((v) => asString(v.url))
+        .filter((u) => Boolean(u) && u !== bestUrl);
+
       const orig = asRecord(videoItem.original_info);
       const width = asNumber(orig?.width, 1280);
       const height = asNumber(orig?.height, 720);
       const durationMs = asNumber(info?.duration_millis, 0);
       const posterUrl = asString(videoItem.media_url_https);
-      const fallbackUrls = variants
-        .slice(1)
-        .map((v) => asString(v.url))
-        .filter(Boolean);
 
       const video: FlickVideo = {
-        url: asString(best.url),
+        url: bestUrl,
         fallbackUrl: fallbackUrls[0],
         fallbackUrls: fallbackUrls.length > 0 ? fallbackUrls : undefined,
         width,

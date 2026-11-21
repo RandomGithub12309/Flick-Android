@@ -24,7 +24,9 @@ type Props = {
   onUnplayable?: () => void;
   onEnded?: () => void;
   onOpenSubreddit?: (subreddit: string) => void;
+  onOpenRedditUser?: (username: string) => void;
   onOpenTwitterUser?: (username: string) => void;
+  onOpenPornhubCreator?: (author: string, authorUrl?: string) => void;
 };
 
 export function PostSlide({
@@ -39,7 +41,9 @@ export function PostSlide({
   onUnplayable,
   onEnded,
   onOpenSubreddit,
+  onOpenRedditUser,
   onOpenTwitterUser,
+  onOpenPornhubCreator,
 }: Props) {
   const [playback, setPlayback] = useState<PlaybackInfo>({
     ratio: null,
@@ -505,9 +509,17 @@ export function PostSlide({
             ) : null}
             <div className="pointer-events-auto mb-1.5 flex flex-wrap items-center gap-2 text-sm font-medium text-fg">
               {post.platform === "pornhub" ? (
-                <span className="rounded-full bg-amber-500/20 px-2.5 py-1 text-amber-300">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenPornhubCreator?.(post.author, post.authorUrl);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="rounded-full bg-amber-500/20 px-2.5 py-1 text-amber-300 hover:bg-amber-500/30 active:scale-95 transition"
+                >
                   PH · {post.author}
-                </span>
+                </button>
               ) : (
                 <button
                   type="button"
@@ -533,13 +545,30 @@ export function PostSlide({
             <h2 className="text-base font-semibold leading-snug text-balance text-fg line-clamp-3 [@media(orientation:landscape)_and_(max-height:520px)]:line-clamp-1 [@media(orientation:landscape)_and_(max-height:520px)]:text-sm">
               {post.title}
             </h2>
-            <p className="mt-1 text-xs text-muted">
-              {post.platform === "pornhub"
-                ? "Pornhub"
-                : post.platform === "twitter"
-                  ? "X"
-                  : `u/${post.author}`}
-            </p>
+            {post.platform !== "pornhub" &&
+            post.platform !== "twitter" &&
+            post.author &&
+            post.author !== "[deleted]" ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenRedditUser?.(post.author);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="pointer-events-auto mt-1 text-xs text-muted underline decoration-fg/25 underline-offset-2 hover:text-fg active:scale-95 transition"
+              >
+                u/{post.author}
+              </button>
+            ) : (
+              <p className="mt-1 text-xs text-muted">
+                {post.platform === "pornhub"
+                  ? "Pornhub"
+                  : post.platform === "twitter"
+                    ? "X"
+                    : `u/${post.author}`}
+              </p>
+            )}
           </div>
 
           {tryingToPlay && active ? (

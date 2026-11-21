@@ -13,6 +13,7 @@ export type SearchEngine = "reddit" | "pornhub";
 type Props = {
   onSelectSubreddit: (subreddit: string, sort: SubredditSort) => void;
   onPlayPornhub?: (posts: FlickPost[], startIndex: number) => void;
+  onOpenPornhubCreator?: (author: string, authorUrl?: string) => void;
   initialEngine?: SearchEngine;
   placeholder?: string;
   compact?: boolean;
@@ -34,6 +35,7 @@ const PH_SORTS: { id: PornhubSort; label: string }[] = [
 export function SubredditSearch({
   onSelectSubreddit,
   onPlayPornhub,
+  onOpenPornhubCreator,
   initialEngine = "reddit",
   placeholder,
   compact = false,
@@ -383,7 +385,17 @@ export function SubredditSearch({
 
                       <div className="flex items-center justify-between gap-2">
                         <div className="min-w-0 text-[11px] text-muted">
-                          <p className="truncate">{item.author}</p>
+                          {onOpenPornhubCreator ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenPornhubCreator(item.author, item.authorUrl)}
+                              className="max-w-full truncate text-left underline decoration-fg/25 underline-offset-2 hover:text-fg"
+                            >
+                              {item.author}
+                            </button>
+                          ) : (
+                            <p className="truncate">{item.author}</p>
+                          )}
                           <p className="truncate tabular-nums">
                             {[item.views ? `${item.views} views` : null, item.rating]
                               .filter(Boolean)

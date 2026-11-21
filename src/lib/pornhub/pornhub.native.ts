@@ -173,3 +173,43 @@ export async function fetchPornhubComments(viewkey: string): Promise<RedditComme
   commentsCache.set(key, { comments, at: Date.now() });
   return comments;
 }
+
+export async function fetchPornhubCreatorVideos(options: {
+  author: string;
+  authorUrl?: string;
+  page?: number;
+}): Promise<PornhubSearchResult[]> {
+  const page = options.page ?? 1;
+  const candidateUrls: string[] = [];
+
+  if (options.authorUrl && options.authorUrl.startsWith("https://www.pornhub.com/")) {
+    const base = options.authorUrl.replace(/\/+$/, "");
+    const videosBase = base.endsWith("/videos") ? base : `${base}/videos`;
+    candidateUrls.push(page > 1 ? `${videosBase}?page=${page}` : videosBase);
+    if (videosBase !== base) {
+      candidateUrls.push(page > 1 ? `${base}?page=${page}` : base);
+    }
+  } else {
+    const slug = options.author
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    if (slug) {
+      const base = `https://www.pornhub.com/model/${encodeURIComponent(slug)}/videos`;
+      candidateUrls.push(page > 1 ? `${base}?page=${page}` : base);
+    }
+  }
+
+  for (const url of candidateUrls) {
+    try {
+      const html = await fetchPageText(url);
+      const parsed = parsePornhubSearchHtml(html);
+      if (parsed.length > 0) return parsed;
+    } catch {
+      // Try next candidate URL or fall back to creator search
+    }
+  }
+
+  return searchPornhubVideos(options.author, { page });
+}

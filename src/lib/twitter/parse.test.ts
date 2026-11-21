@@ -73,6 +73,41 @@ test("parseTweetResult picks highest bitrate mp4 and sets audio flag", () => {
   assert.equal(post.permalink, "https://x.com/nasa/status/1890001");
 });
 
+test("parseTweetResult prefers crisp ~2Mbps HD over oversized 10Mbps uploads for fast startup", () => {
+  const post = parseTweetResult({
+    rest_id: "1890002",
+    core: { user_results: { result: { core: { screen_name: "4kclip" } } } },
+    legacy: {
+      full_text: "High bitrate clip",
+      extended_entities: {
+        media: [
+          {
+            type: "video",
+            media_url_https: "https://pbs.twimg.com/thumb.jpg",
+            video_info: {
+              variants: [
+                { content_type: "video/mp4", bitrate: 256000, url: "https://video.twimg.com/256k.mp4" },
+                { content_type: "video/mp4", bitrate: 832000, url: "https://video.twimg.com/832k.mp4" },
+                { content_type: "video/mp4", bitrate: 2176000, url: "https://video.twimg.com/2m.mp4" },
+                { content_type: "video/mp4", bitrate: 10368000, url: "https://video.twimg.com/10m.mp4" },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  });
+
+  assert.ok(post);
+  assert.equal(post.video?.url, "https://video.twimg.com/2m.mp4");
+  assert.equal(post.video?.fallbackUrl, "https://video.twimg.com/10m.mp4");
+  assert.deepEqual(post.video?.fallbackUrls, [
+    "https://video.twimg.com/10m.mp4",
+    "https://video.twimg.com/832k.mp4",
+    "https://video.twimg.com/256k.mp4",
+  ]);
+});
+
 test("parseTweetResult handles animated_gif without audio and multi-photo galleries", () => {
   const gif = parseTweetResult({
     rest_id: "200",

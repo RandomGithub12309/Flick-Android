@@ -1,4 +1,4 @@
-import { loadDemoFeed, loadSavedFeed, loadSubredditFeed } from "@/lib/reddit/loader";
+import { loadDemoFeed, loadRedditUserFeed, loadSavedFeed, loadSubredditFeed } from "@/lib/reddit/loader";
 import { loadTwitterBookmarks, loadTwitterUserFeed } from "@/lib/twitter/loader";
 import { useFlick } from "@/store/flick";
 import type { FlickPost, SubredditSort } from "@/lib/reddit/types";
@@ -13,6 +13,8 @@ export type FeedRequest = {
   reddit: RedditLane;
   subreddit?: string;
   sort?: SubredditSort;
+  /** Load submitted media history for a specific Reddit u/username. */
+  redditUser?: string;
   /** Load media from a specific X @handle. */
   twitterUser?: string;
 };
@@ -21,6 +23,7 @@ export type FeedResult = {
   posts: FlickPost[];
   source: FeedSource;
   subreddit?: string | null;
+  redditUser?: string | null;
   twitterUser?: string | null;
   notice: string | null;
 };
@@ -99,6 +102,14 @@ export async function loadDeck(
     const posts = applyDeckFilters(raw, filterOpts);
     onProgress?.(posts.length);
     return { posts, source: "twitter-user", twitterUser: clean, notice: null };
+  }
+
+  if (request.redditUser) {
+    const clean = request.redditUser.replace(/^\/?u\//i, "").trim();
+    const raw = await loadRedditUserFeed(clean, state.session);
+    const posts = applyDeckFilters(raw, filterOpts);
+    onProgress?.(posts.length);
+    return { posts, source: "reddit-user", redditUser: clean, notice: null };
   }
 
   if (request.reddit === "subreddit" && request.subreddit) {
@@ -227,19 +238,21 @@ export async function refreshDeck(request?: Partial<FeedRequest>): Promise<boole
   store.setNotice(null);
 
   const platform = merged.platform ?? store.feedPlatform;
-  const label = merged.twitterUser
-    ? `Loading @${merged.twitterUser.replace(/^@/, "")}…`
-    : merged.reddit === "subreddit" && merged.subreddit
-      ? `Loading r/${merged.subreddit.replace(/^\/?r\//i, "")}…`
-      : platform === "pornhub"
-        ? "Loading saved Pornhub videos…"
-        : platform === "twitter"
-          ? "Pulling your X bookmarks…"
-          : platform === "mix" && (store.twitterSession || store.savedPornhub.length > 0)
-            ? "Mixing your saved feeds…"
-            : merged.reddit === "saved"
-              ? "Pulling your saved posts…"
-              : "Pulling the Reddit mix…";
+  const label = merged.redditUser
+    ? `Loading u/${merged.redditUser.replace(/^\/?u\//i, "")}…`
+    : merged.twitterUser
+      ? `Loading @${merged.twitterUser.replace(/^@/, "")}…`
+      : merged.reddit === "subreddit" && merged.subreddit
+        ? `Loading r/${merged.subreddit.replace(/^\/?r\//i, "")}…`
+        : platform === "pornhub"
+          ? "Loading saved Pornhub videos…"
+          : platform === "twitter"
+            ? "Pulling your X bookmarks…"
+            : platform === "mix" && (store.twitterSession || store.savedPornhub.length > 0)
+              ? "Mixing your saved feeds…"
+              : merged.reddit === "saved"
+                ? "Pulling your saved posts…"
+                : "Pulling the Reddit mix…";
 
   store.setLoading(label, 0);
 
@@ -258,6 +271,8 @@ export async function refreshDeck(request?: Partial<FeedRequest>): Promise<boole
     result.source,
     result.subreddit ?? null,
     result.twitterUser ?? null,
+    0,
+    result.redditUser ?? null,
   );
   store.setNotice(result.notice);
   return true;

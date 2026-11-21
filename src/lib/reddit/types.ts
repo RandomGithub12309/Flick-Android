@@ -57,6 +57,7 @@ export type FlickPost = {
   title: string;
   subreddit: string;
   author: string;
+  authorUrl?: string;
   permalink: string;
   sourceUrl?: string;
   /**

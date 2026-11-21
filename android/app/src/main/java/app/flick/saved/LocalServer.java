@@ -115,6 +115,7 @@ public final class LocalServer {
         }
     }
 
+    private static final long INITIAL_OPEN_RANGE_BYTES = 1024L * 1024;
     private static final long MAX_OPEN_RANGE_BYTES = 2L * 1024 * 1024;
     private static final Pattern OPEN_RANGE_PATTERN = Pattern.compile("^bytes=(\\d+)-$");
 
@@ -227,8 +228,8 @@ public final class LocalServer {
     }
 
     /**
-     * Bounds open-ended `bytes=N-` requests to a 2MB chunk so each upstream
-     * connection completes cleanly instead of stalling when WebView pauses reading.
+     * Bounds open-ended `bytes=N-` requests so each upstream connection
+     * completes cleanly (1MB for initial startup `bytes=0-`, 2MB afterwards).
      */
     private static String normalizeRangeHeader(String rangeHeader, boolean headOnly) {
         if (rangeHeader == null || rangeHeader.isEmpty() || headOnly) return rangeHeader;
@@ -236,7 +237,8 @@ public final class LocalServer {
         if (!m.matches()) return rangeHeader;
         try {
             long start = Long.parseLong(m.group(1));
-            long end = start + MAX_OPEN_RANGE_BYTES - 1;
+            long chunk = start == 0L ? INITIAL_OPEN_RANGE_BYTES : MAX_OPEN_RANGE_BYTES;
+            long end = start + chunk - 1;
             return "bytes=" + start + "-" + end;
         } catch (NumberFormatException ignored) {
             return rangeHeader;
@@ -254,6 +256,7 @@ public final class LocalServer {
             OutputStream out) throws IOException {
         String effectiveRange = normalizeRangeHeader(rangeHeader, headOnly);
         HttpURLConnection conn = null;
+        boolean completedCleanly = false;
         try {
             int status = 0;
             for (int attempt = 0; attempt < 2; attempt++) {
@@ -302,8 +305,11 @@ public final class LocalServer {
             }
 
             streamUpstreamResponse(conn, status, headOnly, out);
+            completedCleanly = true;
         } finally {
-            if (conn != null) conn.disconnect();
+            // Only disconnect on early abort/error so Android's HttpURLConnection
+            // returns completed sockets to its TLS keep-alive pool.
+            if (conn != null && !completedCleanly) conn.disconnect();
         }
     }
 
@@ -390,6 +396,7 @@ public final class LocalServer {
 
         String effectiveRange = normalizeRangeHeader(rangeHeader, headOnly);
         HttpURLConnection conn = null;
+        boolean completedCleanly = false;
         try {
             conn = openCdnConnection(target, id, effectiveRange, ifRangeHeader, headOnly);
             int status = conn.getResponseCode();
@@ -412,8 +419,9 @@ public final class LocalServer {
             }
 
             streamUpstreamResponse(conn, status, headOnly, out);
+            completedCleanly = true;
         } finally {
-            if (conn != null) conn.disconnect();
+            if (conn != null && !completedCleanly) conn.disconnect();
         }
     }
 

@@ -5,6 +5,7 @@ import {
   nativeFetchDemoFeed,
   nativeFetchSavedPage,
   nativeFetchSubredditFeed,
+  nativeFetchUserFeed,
   nativeRefreshGrant,
   nativeResolveRedgifsClip,
   nativeSavePost,
@@ -78,6 +79,13 @@ export async function callSubredditFeed(input: {
   }
   const { redditSubredditFeed } = await import("./functions");
   return redditSubredditFeed({ data: input });
+}
+
+export async function callUserFeed(input: {
+  username: string;
+  accessToken?: string;
+}): Promise<FlickPost[]> {
+  return nativeFetchUserFeed(input);
 }
 
 export async function callSearchSubreddits(input: {

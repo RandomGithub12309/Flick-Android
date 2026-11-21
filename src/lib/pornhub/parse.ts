@@ -116,10 +116,25 @@ export function parsePornhubSearchHtml(html: string): PornhubSearchResult[] {
     const ratingMatch = block.match(/<div\b[^>]*class=["'][^"']*value[^"']*["'][^>]*>([^<]+%)<\/div>/i);
     const rating = ratingMatch?.[1] ? ratingMatch[1].trim() : undefined;
 
+    const authorTagMatch =
+      block.match(
+        /<div\b[^>]*class=["'][^"']*usernameWrap[^"']*["'][^>]*>[\s\S]*?<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i,
+      ) ??
+      block.match(
+        /<a\b[^>]*href=["'](\/(?:model|pornstar|channels|users)\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/i,
+      );
     const authorMatch =
+      authorTagMatch ??
       block.match(/<div\b[^>]*class=["'][^"']*usernameWrap[^"']*["'][^>]*>[\s\S]*?<a\b[^>]*>([\s\S]*?)<\/a>/i) ??
       block.match(/<a\b[^>]*data-mxptype=["'][^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
-    const author = authorMatch?.[1] ? stripTags(authorMatch[1]) : "Pornhub";
+    const rawAuthorHref = authorTagMatch?.[1] ? decodeHtmlEntities(authorTagMatch[1]).trim() : "";
+    const authorUrl = rawAuthorHref
+      ? rawAuthorHref.startsWith("http")
+        ? rawAuthorHref
+        : `https://www.pornhub.com${rawAuthorHref.startsWith("/") ? "" : "/"}${rawAuthorHref}`
+      : undefined;
+    const authorText = authorTagMatch?.[2] ?? authorMatch?.[1] ?? "";
+    const author = authorText ? stripTags(authorText) : "Pornhub";
 
     seen.add(viewkey);
     results.push({
@@ -131,6 +146,7 @@ export function parsePornhubSearchHtml(html: string): PornhubSearchResult[] {
       views,
       rating,
       author: author || "Pornhub",
+      authorUrl,
       permalink: `https://www.pornhub.com/view_video.php?viewkey=${encodeURIComponent(viewkey)}`,
     });
   }
@@ -369,6 +385,7 @@ export function searchResultToFlickPost(item: PornhubSearchResult): FlickPost {
     title: item.title,
     subreddit: "Pornhub",
     author: item.author || "Pornhub",
+    authorUrl: item.authorUrl,
     permalink: item.permalink,
     nsfw: true,
     score: item.views ? parseCompactCount(item.views) : 0,

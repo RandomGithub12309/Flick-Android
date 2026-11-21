@@ -591,7 +591,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         loop={!autoAdvance}
         autoPlay={active}
         muted={muted}
-        preload={active ? "auto" : preload ? "metadata" : "none"}
+        preload={active || preload ? "auto" : "none"}
         className="absolute inset-0 size-full bg-black object-contain"
       />
       {buffering && active && !paused && !blocked ? (

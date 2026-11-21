@@ -10,6 +10,7 @@ export type FeedSource =
   | "saved"
   | "demo"
   | "subreddit"
+  | "reddit-user"
   | "twitter"
   | "twitter-user"
   | "pornhub"
@@ -31,6 +32,7 @@ type FlickState = {
   feedPlatform: FeedPlatform;
   source: FeedSource;
   activeSubreddit: string | null;
+  activeRedditUser: string | null;
   activeTwitterUser: string | null;
   subredditSort: SubredditSort;
   session: RedditSession | null;
@@ -72,6 +74,7 @@ type FlickState = {
     subreddit?: string | null,
     twitterUser?: string | null,
     startIndex?: number,
+    redditUser?: string | null,
   ) => void;
   appendPosts: (more: FlickPost[]) => void;
   removePost: (id: string) => void;
@@ -93,6 +96,7 @@ type CachedDeck = {
   index: number;
   source: FeedSource;
   activeSubreddit: string | null;
+  activeRedditUser: string | null;
   activeTwitterUser: string | null;
 };
 
@@ -100,7 +104,14 @@ function readCachedDeck(): CachedDeck {
   try {
     const raw = typeof window !== "undefined" ? window.localStorage.getItem(DECK_CACHE_KEY) : null;
     if (!raw) {
-      return { posts: [], index: 0, source: "demo", activeSubreddit: null, activeTwitterUser: null };
+      return {
+        posts: [],
+        index: 0,
+        source: "demo",
+        activeSubreddit: null,
+        activeRedditUser: null,
+        activeTwitterUser: null,
+      };
     }
     const parsed = JSON.parse(raw) as Partial<CachedDeck>;
     const posts = Array.isArray(parsed.posts) ? parsed.posts : [];
@@ -112,6 +123,7 @@ function readCachedDeck(): CachedDeck {
       "saved",
       "demo",
       "subreddit",
+      "reddit-user",
       "twitter",
       "twitter-user",
       "pornhub",
@@ -125,11 +137,19 @@ function readCachedDeck(): CachedDeck {
       index,
       source,
       activeSubreddit: typeof parsed.activeSubreddit === "string" ? parsed.activeSubreddit : null,
+      activeRedditUser: typeof parsed.activeRedditUser === "string" ? parsed.activeRedditUser : null,
       activeTwitterUser:
         typeof parsed.activeTwitterUser === "string" ? parsed.activeTwitterUser : null,
     };
   } catch {
-    return { posts: [], index: 0, source: "demo", activeSubreddit: null, activeTwitterUser: null };
+    return {
+      posts: [],
+      index: 0,
+      source: "demo",
+      activeSubreddit: null,
+      activeRedditUser: null,
+      activeTwitterUser: null,
+    };
   }
 }
 
@@ -147,6 +167,7 @@ function scheduleDeckSave(state: FlickState) {
         index: capped.length > 0 ? Math.min(state.index, capped.length - 1) : 0,
         source: state.source,
         activeSubreddit: state.activeSubreddit,
+        activeRedditUser: state.activeRedditUser,
         activeTwitterUser: state.activeTwitterUser,
       };
       window.localStorage.setItem(DECK_CACHE_KEY, JSON.stringify(payload));
@@ -172,6 +193,7 @@ export const useFlick = create<FlickState>()(
       screen: "home",
       source: initialDeck.source,
       activeSubreddit: initialDeck.activeSubreddit,
+      activeRedditUser: initialDeck.activeRedditUser,
       activeTwitterUser: initialDeck.activeTwitterUser,
       subredditSort: "hot",
       session: null,
@@ -228,9 +250,19 @@ export const useFlick = create<FlickState>()(
       setNotice: (notice) => set({ notice }),
       setLoading: (label, count = 0) =>
         set({ screen: "loading", loadingLabel: label, loadingCount: count, error: null }),
-      setPosts: (posts, source, subreddit = null, twitterUser = null, startIndex = 0) => {
+      setPosts: (
+        posts,
+        source,
+        subreddit = null,
+        twitterUser = null,
+        startIndex = 0,
+        redditUser = null,
+      ) => {
         const keepOrder =
-          source === "subreddit" || source === "twitter-user" || source === "pornhub";
+          source === "subreddit" ||
+          source === "reddit-user" ||
+          source === "twitter-user" ||
+          source === "pornhub";
         const deck = keepOrder ? posts : orderDeck(posts);
         const clampedIndex =
           deck.length > 0 ? Math.min(Math.max(0, startIndex), deck.length - 1) : 0;
@@ -238,6 +270,7 @@ export const useFlick = create<FlickState>()(
           posts: deck,
           source,
           activeSubreddit: source === "subreddit" ? subreddit : null,
+          activeRedditUser: source === "reddit-user" ? redditUser : null,
           activeTwitterUser: source === "twitter-user" ? twitterUser : null,
           index: clampedIndex,
           screen: deck.length > 0 ? "feed" : "home",
@@ -357,6 +390,7 @@ export const useFlick = create<FlickState>()(
           screen: "home",
           source: "demo",
           activeSubreddit: null,
+          activeRedditUser: null,
           activeTwitterUser: null,
           error: null,
           notice: null,
@@ -369,6 +403,7 @@ export const useFlick = create<FlickState>()(
           screen: "home",
           source: "demo",
           activeSubreddit: null,
+          activeRedditUser: null,
           activeTwitterUser: null,
           error: null,
           notice: null,
@@ -401,6 +436,7 @@ useFlick.subscribe((state, prev) => {
     state.index !== prev.index ||
     state.source !== prev.source ||
     state.activeSubreddit !== prev.activeSubreddit ||
+    state.activeRedditUser !== prev.activeRedditUser ||
     state.activeTwitterUser !== prev.activeTwitterUser
   ) {
     scheduleDeckSave(state);

@@ -9,6 +9,7 @@ export type PornhubSearchResult = {
   views?: string;
   rating?: string;
   author: string;
+  authorUrl?: string;
   permalink: string;
 };
 

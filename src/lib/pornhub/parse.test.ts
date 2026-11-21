@@ -56,6 +56,7 @@ test("parsePornhubSearchHtml extracts thumbnails, titles, duration, views, ratin
   assert.equal(items[0]?.views, "1.4M");
   assert.equal(items[0]?.rating, "94%");
   assert.equal(items[0]?.author, "CreatorOne");
+  assert.equal(items[0]?.authorUrl, "https://www.pornhub.com/model/creator1");
 
   assert.equal(items[1]?.viewkey, "66xyz987");
   assert.equal(items[1]?.thumbnail, "https://di.phncdn.com/videos/thumb2.jpg");
@@ -63,6 +64,7 @@ test("parsePornhubSearchHtml extracts thumbnails, titles, duration, views, ratin
   const post = searchResultToFlickPost(items[0]!);
   assert.equal(post.platform, "pornhub");
   assert.equal(post.pornhubKey, "65abc123def");
+  assert.equal(post.authorUrl, "https://www.pornhub.com/model/creator1");
   assert.equal(post.score, 1_400_000);
   assert.equal(post.nsfw, true);
 });

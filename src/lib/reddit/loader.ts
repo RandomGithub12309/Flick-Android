@@ -7,6 +7,7 @@ import {
   callSearchSubreddits,
   callSubredditFeed,
   callUnsavePost,
+  callUserFeed,
 } from "./api";
 import type { FlickPost, RedditComment, RedditSession, SavedPage, SubredditInfo, SubredditSort } from "./types";
 import { useFlick } from "@/store/flick";
@@ -110,6 +111,21 @@ export async function loadSubredditFeed(
     }
   }
   return callSubredditFeed({ subreddit, sort, accessToken });
+}
+
+export async function loadRedditUserFeed(
+  username: string,
+  session?: RedditSession | null,
+): Promise<FlickPost[]> {
+  let accessToken: string | undefined;
+  if (session) {
+    try {
+      accessToken = (await ensureFreshSession(session)).accessToken;
+    } catch {
+      accessToken = undefined;
+    }
+  }
+  return callUserFeed({ username, accessToken });
 }
 
 export async function searchRedditSubreddits(
