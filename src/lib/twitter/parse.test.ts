@@ -46,7 +46,8 @@ test("parseTweetResult picks highest bitrate mp4 and sets audio flag", () => {
               duration_millis: 15500,
               variants: [
                 { content_type: "application/x-mpegURL", url: "https://video.twimg.com/pl.m3u8" },
-                { content_type: "video/mp4", bitrate: 632000, url: "https://video.twimg.com/low.mp4" },
+                { content_type: "video/mp4", bitrate: 256000, url: "https://video.twimg.com/lowest.mp4" },
+                { content_type: "video/mp4", bitrate: 632000, url: "https://video.twimg.com/mid.mp4" },
                 { content_type: "video/mp4", bitrate: 2176000, url: "https://video.twimg.com/hd.mp4" },
               ],
             },
@@ -62,7 +63,11 @@ test("parseTweetResult picks highest bitrate mp4 and sets audio flag", () => {
   assert.equal(post.author, "nasa");
   assert.equal(post.title, "Rocket launch clip");
   assert.equal(post.video?.url, "https://video.twimg.com/hd.mp4");
-  assert.equal(post.video?.fallbackUrl, "https://video.twimg.com/low.mp4");
+  assert.equal(post.video?.fallbackUrl, "https://video.twimg.com/mid.mp4");
+  assert.deepEqual(post.video?.fallbackUrls, [
+    "https://video.twimg.com/mid.mp4",
+    "https://video.twimg.com/lowest.mp4",
+  ]);
   assert.equal(post.video?.hasAudio, true);
   assert.equal(post.video?.duration, 15.5);
   assert.equal(post.permalink, "https://x.com/nasa/status/1890001");

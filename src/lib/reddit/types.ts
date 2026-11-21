@@ -15,6 +15,12 @@ export type FlickVideo = {
    */
   fallbackUrl?: string;
   /**
+   * Ordered fallback video URLs (next-best quality first) when a host provides
+   * multiple MP4 renditions (such as X/Twitter) so recovery steps down
+   * gracefully instead of jumping straight to the lowest bitrate.
+   */
+  fallbackUrls?: string[];
+  /**
    * Audio track that lives beside the video, for hosts that split the two
    * (v.redd.it). Redgifs ships sound inside the mp4, so this stays unset there.
    */
@@ -47,7 +53,7 @@ export type FlickVideo = {
 export type FlickPost = {
   id: string;
   name: string;
-  platform?: "reddit" | "twitter";
+  platform?: "reddit" | "twitter" | "pornhub";
   title: string;
   subreddit: string;
   author: string;
@@ -59,6 +65,11 @@ export type FlickPost = {
    * Reddit's own copy of a redgifs clip is muted, so this wins at playback time.
    */
   redgifsId?: string;
+  /**
+   * Pornhub video viewkey so saved/searched videos resolve a fresh signed CDN
+   * stream on playback instead of expiring.
+   */
+  pornhubKey?: string;
   nsfw: boolean;
   score: number;
   createdUtc: number;

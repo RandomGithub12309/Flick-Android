@@ -421,6 +421,8 @@ public class TwitterAuthPlugin extends Plugin {
                     }
                     if (cursor != null && !cursor.isEmpty()) {
                         vars.put("cursor", cursor);
+                    } else {
+                        vars.remove("cursor");
                     }
                     builder.appendQueryParameter("variables", vars.toString());
                 } else {

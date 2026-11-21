@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, FastForward, FileText, Link2, RotateCcw, RotateCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, FastForward, FileText, Link2, Loader2, RotateCcw, RotateCw } from "lucide-react";
 import type { FlickPost, FlickVideo } from "@/lib/reddit/types";
 import { SeekBar } from "@/components/seek-bar";
 import { VideoPlayer } from "@/components/video-player";
 import type { PlaybackInfo, VideoHandle } from "@/components/video-player";
+import { resolvePornhubVideo } from "@/lib/pornhub/pornhub.native";
 import { requestRedgifsClip } from "@/lib/reddit/clip";
 import { isRedgifsProxyUrl } from "@/lib/reddit/redgifs";
 import { audioCandidatesFor } from "@/lib/video-sources";
@@ -48,13 +49,14 @@ export function PostSlide({
   });
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [clip, setClip] = useState<FlickVideo | null>(null);
+  const [resolving, setResolving] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [speed2x, setSpeed2x] = useState(false);
   const [seekFeedback, setSeekFeedback] = useState<"back" | "forward" | null>(null);
 
   const videoRef = useRef<VideoHandle>(null);
   const retries = useRef(0);
-  const lookedUp = useRef(false);
+  const lookupState = useRef<"idle" | "pending" | "failed" | "done">("idle");
   const holdTimer = useRef<number | null>(null);
   const heldLong = useRef(false);
   const downPos = useRef<{ x: number; y: number } | null>(null);
@@ -65,6 +67,7 @@ export function PostSlide({
 
   const gallery = post.gallery ?? [];
   const redgifsId = post.redgifsId;
+  const pornhubKey = post.pornhubKey;
   const video = clip ?? post.video;
   const image = post.kind === "gallery" ? (gallery[galleryIndex] ?? post.image) : post.image;
   const poster = post.image?.url ?? post.thumbnail;
@@ -110,35 +113,82 @@ export function PostSlide({
     };
   }, [clearHold]);
 
-  // Pre-resolve Redgifs clips for both the active slide and the upcoming next slide.
+  // Pre-resolve Redgifs and Pornhub streams for both the active slide and the upcoming next slide.
   useEffect(() => {
-    if ((!active && !preload) || post.video || clip || !redgifsId || lookedUp.current) return;
-    lookedUp.current = true;
+    const hasDeferred = Boolean(redgifsId || pornhubKey);
+    if ((!active && !preload) || post.video || clip || !hasDeferred || lookupState.current !== "idle") {
+      return;
+    }
+    lookupState.current = "pending";
+    if (active) setResolving(true);
     let cancelled = false;
-    void requestRedgifsClip(redgifsId).then((resolved) => {
-      if (cancelled) return;
+    const req = pornhubKey
+      ? resolvePornhubVideo(pornhubKey)
+      : requestRedgifsClip(redgifsId!);
+    void req.then((resolved) => {
+      if (cancelled) {
+        lookupState.current = resolved ? "done" : "failed";
+        return;
+      }
+      setResolving(false);
       if (resolved) {
+        lookupState.current = "done";
         setClip(resolved);
-      } else if (active) {
+      } else {
+        lookupState.current = "failed";
+        if (active) onUnplayable?.();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, clip, onUnplayable, pornhubKey, post.video, preload, redgifsId]);
+
+  // If the slide becomes active after a preload lookup already failed, retry once fresh.
+  useEffect(() => {
+    const hasDeferred = Boolean(redgifsId || pornhubKey);
+    if (!active || post.video || clip || !hasDeferred || lookupState.current !== "failed") return;
+    lookupState.current = "pending";
+    setResolving(true);
+    let cancelled = false;
+    const req = pornhubKey
+      ? resolvePornhubVideo(pornhubKey, { fresh: true })
+      : requestRedgifsClip(redgifsId!, { fresh: true });
+    void req.then((resolved) => {
+      if (cancelled) return;
+      setResolving(false);
+      if (resolved) {
+        lookupState.current = "done";
+        setClip(resolved);
+      } else {
+        lookupState.current = "failed";
         onUnplayable?.();
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [active, clip, onUnplayable, post.video, preload, redgifsId]);
-
-  // If the slide becomes active after a preload lookup already failed, skip it.
-  useEffect(() => {
-    if (active && !post.video && !clip && redgifsId && lookedUp.current) {
-      void requestRedgifsClip(redgifsId, { fresh: true }).then((resolved) => {
-        if (resolved) setClip(resolved);
-        else onUnplayable?.();
-      });
-    }
-  }, [active, clip, onUnplayable, post.video, redgifsId]);
+  }, [active, clip, onUnplayable, pornhubKey, post.video, redgifsId]);
 
   const handleUnplayable = useCallback(() => {
+    if (pornhubKey) {
+      if (retries.current < 1) {
+        retries.current += 1;
+        setResolving(true);
+        void resolvePornhubVideo(pornhubKey, { fresh: true }).then((resolved) => {
+          setResolving(false);
+          if (resolved) {
+            setClip(resolved);
+            setAttempt((n) => n + 1);
+            return;
+          }
+          onUnplayable?.();
+        });
+        return;
+      }
+      onUnplayable?.();
+      return;
+    }
     if (!redgifsId) {
       onUnplayable?.();
       return;
@@ -169,7 +219,7 @@ export function PostSlide({
       return;
     }
     onUnplayable?.();
-  }, [onUnplayable, post.video, redgifsId, video?.url]);
+  }, [onUnplayable, pornhubKey, post.video, redgifsId, video?.url]);
 
   const triggerSeekFeedback = (dir: "back" | "forward") => {
     if (feedbackTimer.current !== null) window.clearTimeout(feedbackTimer.current);
@@ -347,6 +397,14 @@ export function PostSlide({
         </div>
       )}
 
+      {resolving && active && !video ? (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+          <span className="flex size-12 items-center justify-center rounded-full bg-bg/60 text-fg backdrop-blur-sm">
+            <Loader2 className="size-6 animate-spin" />
+          </span>
+        </div>
+      ) : null}
+
       {speed2x ? (
         <div className="pointer-events-none absolute inset-x-0 top-16 z-30 flex justify-center pt-safe">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-bg/75 px-3 py-1 text-xs font-semibold text-fg backdrop-blur-sm">
@@ -446,21 +504,27 @@ export function PostSlide({
               </div>
             ) : null}
             <div className="pointer-events-auto mb-1.5 flex flex-wrap items-center gap-2 text-sm font-medium text-fg">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (post.platform === "twitter") {
-                    onOpenTwitterUser?.(post.author);
-                  } else {
-                    onOpenSubreddit?.(post.subreddit);
-                  }
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="rounded-full bg-fg/14 px-2.5 py-1 hover:bg-fg/25 active:scale-95 transition"
-              >
-                {post.platform === "twitter" ? `@${post.author}` : `r/${post.subreddit}`}
-              </button>
+              {post.platform === "pornhub" ? (
+                <span className="rounded-full bg-amber-500/20 px-2.5 py-1 text-amber-300">
+                  PH · {post.author}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (post.platform === "twitter") {
+                      onOpenTwitterUser?.(post.author);
+                    } else {
+                      onOpenSubreddit?.(post.subreddit);
+                    }
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="rounded-full bg-fg/14 px-2.5 py-1 hover:bg-fg/25 active:scale-95 transition"
+                >
+                  {post.platform === "twitter" ? `@${post.author}` : `r/${post.subreddit}`}
+                </button>
+              )}
               {post.nsfw ? (
                 <span className="rounded-full bg-danger/20 px-2.5 py-1 text-danger">NSFW</span>
               ) : null}
@@ -470,7 +534,11 @@ export function PostSlide({
               {post.title}
             </h2>
             <p className="mt-1 text-xs text-muted">
-              {post.platform === "twitter" ? "X" : `u/${post.author}`}
+              {post.platform === "pornhub"
+                ? "Pornhub"
+                : post.platform === "twitter"
+                  ? "X"
+                  : `u/${post.author}`}
             </p>
           </div>
 

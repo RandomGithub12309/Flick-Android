@@ -31,7 +31,14 @@ export function applyDeckFilters(
 ): FlickPost[] {
   return posts.filter((post) => {
     if (!options.showNsfw && post.nsfw) return false;
-    if (options.mediaFilter === "video" && post.kind !== "video" && !post.redgifsId) return false;
+    if (
+      options.mediaFilter === "video" &&
+      post.kind !== "video" &&
+      !post.redgifsId &&
+      !post.pornhubKey
+    ) {
+      return false;
+    }
     return true;
   });
 }
@@ -106,6 +113,20 @@ export async function loadDeck(
   const redditLane: "saved" | "demo" =
     request.reddit === "saved" && state.session ? "saved" : "demo";
 
+  if (platform === "pornhub") {
+    const savedPh = state.savedPornhub;
+    if (savedPh.length === 0) {
+      throw new Error("No saved Pornhub videos yet — use Search to find and save videos.");
+    }
+    const posts = applyDeckFilters(savedPh, filterOpts);
+    onProgress?.(posts.length);
+    let notice: string | null = null;
+    if (savedPh.length > 0 && posts.length === 0 && !filterOpts.showNsfw) {
+      notice = "Saved Pornhub videos are hidden while NSFW is off in Sources & Filters.";
+    }
+    return { posts, source: "pornhub-saved", notice };
+  }
+
   if (platform === "twitter") {
     if (!state.twitterSession) {
       throw new Error("Sign in to X in Sources & Filters to play your X bookmarks.");
@@ -138,10 +159,13 @@ export async function loadDeck(
     return { posts, source: "twitter", notice };
   }
 
-  if (platform === "mix" && state.twitterSession) {
+  const savedPhPosts = state.savedPornhub;
+
+  if (platform === "mix" && (state.twitterSession || savedPhPosts.length > 0)) {
     let redditCount = 0;
     let twitterCount = 0;
-    const reportTotal = () => onProgress?.(redditCount + twitterCount);
+    const phCount = savedPhPosts.length;
+    const reportTotal = () => onProgress?.(redditCount + twitterCount + phCount);
 
     const [redditRes, twitterRes] = await Promise.allSettled([
       loadRedditLane(
@@ -152,33 +176,35 @@ export async function loadDeck(
         },
         "mix",
       ),
-      loadTwitterBookmarks(state.twitterSession, {
-        onCount: (c) => {
-          twitterCount = c;
-          reportTotal();
-        },
-        onMore: (more) => {
-          const cur = useFlick.getState();
-          if (cur.screen === "feed" && cur.source === "mix") {
-            cur.appendPosts(
-              applyDeckFilters(more, { mediaFilter: cur.mediaFilter, showNsfw: cur.showNsfw }),
-            );
-          }
-        },
-      }),
+      state.twitterSession
+        ? loadTwitterBookmarks(state.twitterSession, {
+            onCount: (c) => {
+              twitterCount = c;
+              reportTotal();
+            },
+            onMore: (more) => {
+              const cur = useFlick.getState();
+              if (cur.screen === "feed" && cur.source === "mix") {
+                cur.appendPosts(
+                  applyDeckFilters(more, { mediaFilter: cur.mediaFilter, showNsfw: cur.showNsfw }),
+                );
+              }
+            },
+          })
+        : Promise.resolve([] as FlickPost[]),
     ]);
 
     const redditPosts = redditRes.status === "fulfilled" ? redditRes.value.posts : [];
     const twitterPosts = twitterRes.status === "fulfilled" ? twitterRes.value : [];
-    const combined = applyDeckFilters([...redditPosts, ...twitterPosts], filterOpts);
+    const combined = applyDeckFilters([...redditPosts, ...twitterPosts, ...savedPhPosts], filterOpts);
 
     let notice: string | null = null;
-    if (redditRes.status === "rejected" && twitterRes.status === "fulfilled") {
-      notice = "Reddit failed to load — showing X bookmarks only.";
-    } else if (twitterRes.status === "rejected" && redditRes.status === "fulfilled") {
+    if (redditRes.status === "rejected" && (twitterPosts.length > 0 || savedPhPosts.length > 0)) {
+      notice = "Reddit failed to load — showing other saved sources.";
+    } else if (state.twitterSession && twitterRes.status === "rejected" && (redditPosts.length > 0 || savedPhPosts.length > 0)) {
       const msg = twitterRes.reason instanceof Error ? twitterRes.reason.message : "X failed";
       notice = `X bookmarks skipped (${msg}).`;
-    } else if (redditRes.status === "rejected" && twitterRes.status === "rejected") {
+    } else if (redditRes.status === "rejected" && twitterRes.status === "rejected" && savedPhPosts.length === 0) {
       throw twitterRes.reason instanceof Error
         ? twitterRes.reason
         : new Error("Could not load Reddit or X.");
@@ -205,13 +231,15 @@ export async function refreshDeck(request?: Partial<FeedRequest>): Promise<boole
     ? `Loading @${merged.twitterUser.replace(/^@/, "")}…`
     : merged.reddit === "subreddit" && merged.subreddit
       ? `Loading r/${merged.subreddit.replace(/^\/?r\//i, "")}…`
-      : platform === "twitter"
-        ? "Pulling your X bookmarks…"
-        : platform === "mix" && store.twitterSession
-          ? "Mixing Reddit & X bookmarks…"
-          : merged.reddit === "saved"
-            ? "Pulling your saved posts…"
-            : "Pulling the Reddit mix…";
+      : platform === "pornhub"
+        ? "Loading saved Pornhub videos…"
+        : platform === "twitter"
+          ? "Pulling your X bookmarks…"
+          : platform === "mix" && (store.twitterSession || store.savedPornhub.length > 0)
+            ? "Mixing your saved feeds…"
+            : merged.reddit === "saved"
+              ? "Pulling your saved posts…"
+              : "Pulling the Reddit mix…";
 
   store.setLoading(label, 0);
 

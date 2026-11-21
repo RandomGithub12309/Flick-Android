@@ -29,9 +29,38 @@ function seekableEndOf(el: HTMLMediaElement): number | null {
 }
 
 /**
- * How long the active video gets to actually start before we skip it.
+ * End of the buffered range covering `time`, falling back to the last range.
+ * Used both for the seek bar indicator and to detect whether bytes are still
+ * actively arriving before treating a video as stalled.
  */
-const START_GRACE_MS = 10_000;
+function bufferedEndAt(el: HTMLMediaElement, time: number): number | null {
+  try {
+    const { buffered } = el;
+    if (buffered.length === 0) return null;
+    for (let i = 0; i < buffered.length; i++) {
+      const start = buffered.start(i);
+      const end = buffered.end(i);
+      if (time >= start - 0.5 && time <= end + 0.5) {
+        return Number.isFinite(end) ? end : null;
+      }
+    }
+    const end = buffered.end(buffered.length - 1);
+    return Number.isFinite(end) ? end : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How long the active video gets to actually start before we step down or skip it.
+ */
+const START_GRACE_MS = 12_000;
+/** Seconds with neither playback nor buffer progress before recovering mid-playback. */
+const MID_STALL_SECONDS = 5;
+/** Seconds with neither playback nor buffer progress before recovering on initial start. */
+const INITIAL_STALL_SECONDS = 6;
+/** Reload attempts on the current (highest-quality) source before stepping down. */
+const RELOADS_BEFORE_DOWNGRADE = 2;
 
 export type PlaybackInfo = {
   /** 0..1 through the timeline, or null until the duration is known. */
@@ -94,6 +123,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   const activeRef = useRef(active);
   const blockedRef = useRef(false);
   const userPausedRef = useRef(false);
+  const pendingSeekRef = useRef<number | null>(null);
   const onUnplayableRef = useRef(onUnplayable);
   activeRef.current = active;
   onUnplayableRef.current = onUnplayable;
@@ -162,8 +192,11 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     [clearStartTimer],
   );
 
-  const advanceSource = useCallback(() => {
+  const advanceSource = useCallback((resumeAt?: number) => {
     if (sourceIndex + 1 >= sources.length) return false;
+    if (resumeAt != null && Number.isFinite(resumeAt) && resumeAt > 0.25) {
+      pendingSeekRef.current = resumeAt;
+    }
     setSourceIndex(sourceIndex + 1);
     return true;
   }, [sourceIndex, sources.length]);
@@ -171,6 +204,9 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
   useEffect(() => {
     setSourceIndex(0);
     setAudioIndex(0);
+    startedAudioSrc.current = null;
+    pendingSeekRef.current = null;
+    reported.current = false;
     userPausedRef.current = false;
     setPaused(false);
     setBuffering(false);
@@ -227,6 +263,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
           );
         } else {
           userPausedRef.current = true;
+          clearStartTimer();
           setPaused(true);
           showFlash("pause");
           el.pause();
@@ -234,7 +271,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         }
       },
     }),
-    [muted, showFlash],
+    [clearStartTimer, muted, showFlash],
   );
 
   useEffect(() => {
@@ -249,16 +286,25 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       }
     };
 
+    const applyPendingSeek = () => {
+      const target = pendingSeekRef.current;
+      if (target == null) return;
+      const duration = effectiveDuration(el.duration, seekableEndOf(el));
+      if (duration <= 0 && el.readyState < 1) return;
+      pendingSeekRef.current = null;
+      const clamped = duration > 0 ? Math.min(Math.max(0, target), Math.max(0, duration - 0.1)) : target;
+      try {
+        el.currentTime = clamped;
+        if (audio) audio.currentTime = clamped;
+      } catch {
+        // Ignore seek error if media is not yet seekable
+      }
+    };
+
     const publish = () => {
       const duration = effectiveDuration(el.duration, seekableEndOf(el));
-      let buffered: number | null = null;
-      if (duration > 0 && el.buffered.length > 0) {
-        try {
-          buffered = el.buffered.end(el.buffered.length - 1) / duration;
-        } catch {
-          buffered = null;
-        }
-      }
+      const bufEnd = bufferedEndAt(el, el.currentTime);
+      const buffered = duration > 0 && bufEnd != null ? Math.min(1, bufEnd / duration) : null;
       onProgress?.({
         ratio: duration > 0 ? el.currentTime / duration : null,
         buffered,
@@ -279,6 +325,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     };
 
     const onCanPlay = () => {
+      applyPendingSeek();
       setBuffering(false);
       if (activeRef.current && !userPausedRef.current && !blockedRef.current && el.paused) {
         void el.play().then(
@@ -293,6 +340,11 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
           },
         );
       }
+    };
+
+    const onLoadedMetadata = () => {
+      applyPendingSeek();
+      publish();
     };
 
     const onTime = () => {
@@ -320,7 +372,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       on("timeupdate", onTime),
       on("progress", publish),
       on("durationchange", publish),
-      on("loadedmetadata", publish),
+      on("loadedmetadata", onLoadedMetadata),
       on("seeked", () => {
         syncAudio();
         publish();
@@ -329,7 +381,7 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
         if (activeRef.current && autoAdvance) onEnded?.();
       }),
       on("error", () => {
-        if (!advanceSource()) reportUnplayable("error");
+        if (!advanceSource(el.currentTime)) reportUnplayable("error");
       }),
     ];
 
@@ -436,12 +488,14 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [active, muted]);
 
-  // Recover if the active stream stalls with no time progress for 3 seconds.
+  // Recover only on a genuine stall (neither playhead nor buffer advancing).
+  // Reload the current high-quality stream first before stepping down quality.
   useEffect(() => {
     if (!active || paused || blocked) return;
     const el = videoRef.current;
     if (!el) return;
     let lastTime = el.currentTime;
+    let lastBuffered = bufferedEndAt(el, el.currentTime) ?? 0;
     let stalledTicks = 0;
     let reloadAttempts = 0;
 
@@ -450,31 +504,42 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
       if (el.paused || el.ended) {
         stalledTicks = 0;
         lastTime = el.currentTime;
+        lastBuffered = bufferedEndAt(el, el.currentTime) ?? 0;
         return;
       }
       if (Math.abs(el.currentTime - lastTime) > 0.05) {
         lastTime = el.currentTime;
+        lastBuffered = bufferedEndAt(el, el.currentTime) ?? lastBuffered;
         stalledTicks = 0;
         reloadAttempts = 0;
         setBuffering(false);
         return;
       }
-      stalledTicks += 1;
-      if (stalledTicks >= 3) {
+      // If bytes are still actively arriving at the playhead, let it finish buffering.
+      const currentBuffered = bufferedEndAt(el, el.currentTime) ?? 0;
+      if (currentBuffered > lastBuffered + 0.15) {
+        lastBuffered = currentBuffered;
         stalledTicks = 0;
-        if (advanceSource()) return;
-        if (reloadAttempts < 2) {
+        return;
+      }
+
+      stalledTicks += 1;
+      const threshold = el.currentTime > 0.1 ? MID_STALL_SECONDS : INITIAL_STALL_SECONDS;
+      if (stalledTicks >= threshold) {
+        stalledTicks = 0;
+        const resumeAt = el.currentTime;
+        if (reloadAttempts < RELOADS_BEFORE_DOWNGRADE) {
           reloadAttempts += 1;
-          const resumeAt = el.currentTime;
+          if (resumeAt > 0.25) pendingSeekRef.current = resumeAt;
           try {
             el.load();
-            if (resumeAt > 0.2) el.currentTime = resumeAt;
             void el.play().catch(() => undefined);
           } catch {
             // Ignore reload errors
           }
           return;
         }
+        if (advanceSource(resumeAt)) return;
         if (el.currentTime <= 0.1 && el.readyState < 3 && !reported.current) {
           reported.current = true;
           clearStartTimer();
@@ -497,7 +562,11 @@ export const VideoPlayer = forwardRef<VideoHandle, Props>(function VideoPlayer(
 
     startTimer.current = window.setTimeout(() => {
       startTimer.current = null;
-      if (!advanceSource()) reportUnplayable("start-timeout");
+      const el = videoRef.current;
+      if (!activeRef.current || userPausedRef.current) return;
+      if (el && (el.currentTime > 0.1 || el.readyState >= 3)) return;
+      if (el && el.buffered.length > 0 && el.networkState === el.NETWORK_LOADING) return;
+      if (!advanceSource(el?.currentTime)) reportUnplayable("start-timeout");
     }, START_GRACE_MS);
 
     return () => clearStartTimer();

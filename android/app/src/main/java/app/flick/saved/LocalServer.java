@@ -115,9 +115,13 @@ public final class LocalServer {
         }
     }
 
+    private static final long MAX_OPEN_RANGE_BYTES = 2L * 1024 * 1024;
+    private static final Pattern OPEN_RANGE_PATTERN = Pattern.compile("^bytes=(\\d+)-$");
+
     private void handleClient(Socket socket) {
         try (Socket s = socket) {
             s.setSoTimeout(15000);
+            s.setTcpNoDelay(true);
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(s.getInputStream(), StandardCharsets.US_ASCII));
             String requestLine = reader.readLine();
@@ -132,6 +136,7 @@ public final class LocalServer {
             String query = qIdx >= 0 ? rawPath.substring(qIdx + 1) : "";
 
             String rangeHeader = null;
+            String ifRangeHeader = null;
             String line;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
                 int colon = line.indexOf(':');
@@ -139,6 +144,8 @@ public final class LocalServer {
                     String name = line.substring(0, colon).trim().toLowerCase(Locale.US);
                     if ("range".equals(name)) {
                         rangeHeader = line.substring(colon + 1).trim();
+                    } else if ("if-range".equals(name)) {
+                        ifRangeHeader = line.substring(colon + 1).trim();
                     }
                 }
             }
@@ -161,7 +168,7 @@ public final class LocalServer {
                     sendJsonError(out, 400, "bad redgifs id");
                     return;
                 }
-                proxyRedgifs(id, rangeHeader, "HEAD".equals(method), out);
+                proxyRedgifs(id, rangeHeader, ifRangeHeader, "HEAD".equals(method), out);
                 return;
             }
 
@@ -171,7 +178,33 @@ public final class LocalServer {
                     sendJsonError(out, 400, "bad twitter video url");
                     return;
                 }
-                proxyTwitterVideo(targetUrl, rangeHeader, "HEAD".equals(method), out);
+                proxyDirectVideo(
+                        targetUrl,
+                        "https://x.com/",
+                        "https://x.com",
+                        "twitter",
+                        rangeHeader,
+                        ifRangeHeader,
+                        "HEAD".equals(method),
+                        out);
+                return;
+            }
+
+            if ("/api/pornhub/video".equals(path) && ("GET".equals(method) || "HEAD".equals(method))) {
+                String targetUrl = extractQueryParam(query, "url");
+                if (!isAllowedPornhubUrl(targetUrl)) {
+                    sendJsonError(out, 400, "bad pornhub video url");
+                    return;
+                }
+                proxyDirectVideo(
+                        targetUrl,
+                        "https://www.pornhub.com/",
+                        "https://www.pornhub.com",
+                        "pornhub",
+                        rangeHeader,
+                        ifRangeHeader,
+                        "HEAD".equals(method),
+                        out);
                 return;
             }
 
@@ -180,24 +213,72 @@ public final class LocalServer {
         }
     }
 
-    private void proxyTwitterVideo(String target, String rangeHeader, boolean headOnly, OutputStream out) throws IOException {
+    private static boolean isAllowedPornhubUrl(String targetUrl) {
+        if (targetUrl == null || !targetUrl.startsWith("https://")) return false;
+        try {
+            String host = new URL(targetUrl).getHost().toLowerCase(Locale.US);
+            return host.equals("pornhub.com")
+                    || host.endsWith(".pornhub.com")
+                    || host.equals("phncdn.com")
+                    || host.endsWith(".phncdn.com");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Bounds open-ended `bytes=N-` requests to a 2MB chunk so each upstream
+     * connection completes cleanly instead of stalling when WebView pauses reading.
+     */
+    private static String normalizeRangeHeader(String rangeHeader, boolean headOnly) {
+        if (rangeHeader == null || rangeHeader.isEmpty() || headOnly) return rangeHeader;
+        java.util.regex.Matcher m = OPEN_RANGE_PATTERN.matcher(rangeHeader.trim());
+        if (!m.matches()) return rangeHeader;
+        try {
+            long start = Long.parseLong(m.group(1));
+            long end = start + MAX_OPEN_RANGE_BYTES - 1;
+            return "bytes=" + start + "-" + end;
+        } catch (NumberFormatException ignored) {
+            return rangeHeader;
+        }
+    }
+
+    private void proxyDirectVideo(
+            String target,
+            String referer,
+            String origin,
+            String label,
+            String rangeHeader,
+            String ifRangeHeader,
+            boolean headOnly,
+            OutputStream out) throws IOException {
+        String effectiveRange = normalizeRangeHeader(rangeHeader, headOnly);
         HttpURLConnection conn = null;
         try {
             int status = 0;
             for (int attempt = 0; attempt < 2; attempt++) {
                 try {
                     conn = (HttpURLConnection) new URL(target).openConnection();
+                    conn.setRequestMethod(headOnly ? "HEAD" : "GET");
                     conn.setInstanceFollowRedirects(true);
-                    conn.setConnectTimeout(8000);
-                    conn.setReadTimeout(12000);
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(20000);
                     conn.setRequestProperty("User-Agent", REDGIFS_UA);
-                    conn.setRequestProperty("Referer", "https://x.com/");
-                    conn.setRequestProperty("Origin", "https://x.com");
-                    if (rangeHeader != null && !rangeHeader.isEmpty()) {
-                        conn.setRequestProperty("Range", rangeHeader);
+                    conn.setRequestProperty("Referer", referer);
+                    conn.setRequestProperty("Origin", origin);
+                    conn.setRequestProperty("Accept-Encoding", "identity");
+                    if (effectiveRange != null && !effectiveRange.isEmpty()) {
+                        conn.setRequestProperty("Range", effectiveRange);
+                    }
+                    if (ifRangeHeader != null && !ifRangeHeader.isEmpty()) {
+                        conn.setRequestProperty("If-Range", ifRangeHeader);
                     }
                     status = conn.getResponseCode();
                     if (status == 200 || status == 206 || status == 416) {
+                        break;
+                    }
+                    // Do not waste time retrying permanent 4xx errors.
+                    if (status >= 400 && status < 500 && status != 429) {
                         break;
                     }
                 } catch (IOException e) {
@@ -216,54 +297,66 @@ public final class LocalServer {
             }
 
             if (conn == null || (status != 200 && status != 206 && status != 416)) {
-                sendJsonError(out, 502, "twitter upstream " + status);
+                sendJsonError(out, 502, label + " upstream " + status);
                 return;
             }
 
-            String contentType = conn.getHeaderField("Content-Type");
-            if (contentType == null || contentType.isEmpty()) contentType = "video/mp4";
-            String contentLength = conn.getHeaderField("Content-Length");
-            String contentRange = conn.getHeaderField("Content-Range");
-            String acceptRanges = conn.getHeaderField("Accept-Ranges");
-            if (acceptRanges == null || acceptRanges.isEmpty()) acceptRanges = "bytes";
-            String etag = conn.getHeaderField("ETag");
-            String lastModified = conn.getHeaderField("Last-Modified");
+            streamUpstreamResponse(conn, status, headOnly, out);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
 
-            StringBuilder headers = new StringBuilder();
-            headers.append("HTTP/1.1 ").append(status).append(' ').append(reasonPhrase(status)).append("\r\n");
-            headers.append("Content-Type: ").append(contentType).append("\r\n");
-            headers.append("Accept-Ranges: ").append(acceptRanges).append("\r\n");
-            if (contentLength != null) headers.append("Content-Length: ").append(contentLength).append("\r\n");
-            if (contentRange != null) headers.append("Content-Range: ").append(contentRange).append("\r\n");
-            if (etag != null) headers.append("ETag: ").append(etag).append("\r\n");
-            if (lastModified != null) headers.append("Last-Modified: ").append(lastModified).append("\r\n");
+    private static void streamUpstreamResponse(
+            HttpURLConnection conn,
+            int status,
+            boolean headOnly,
+            OutputStream out) throws IOException {
+        String contentType = conn.getHeaderField("Content-Type");
+        if (contentType == null || contentType.isEmpty()) contentType = "video/mp4";
+        String contentLength = conn.getHeaderField("Content-Length");
+        String contentRange = conn.getHeaderField("Content-Range");
+        String acceptRanges = conn.getHeaderField("Accept-Ranges");
+        if (acceptRanges == null || acceptRanges.isEmpty()) acceptRanges = "bytes";
+        String etag = conn.getHeaderField("ETag");
+        String lastModified = conn.getHeaderField("Last-Modified");
+
+        StringBuilder headers = new StringBuilder();
+        headers.append("HTTP/1.1 ").append(status).append(' ').append(reasonPhrase(status)).append("\r\n");
+        headers.append("Content-Type: ").append(contentType).append("\r\n");
+        headers.append("Accept-Ranges: ").append(acceptRanges).append("\r\n");
+        if (contentLength != null) headers.append("Content-Length: ").append(contentLength).append("\r\n");
+        if (contentRange != null) headers.append("Content-Range: ").append(contentRange).append("\r\n");
+        if (etag != null) headers.append("ETag: ").append(etag).append("\r\n");
+        if (lastModified != null) headers.append("Last-Modified: ").append(lastModified).append("\r\n");
+        if (status == 200 || status == 206) {
+            headers.append("Cache-Control: private, max-age=300\r\n");
+        } else {
             headers.append("Cache-Control: no-store\r\n");
-            headers.append("Access-Control-Allow-Origin: *\r\n");
-            headers.append("Connection: close\r\n\r\n");
+        }
+        headers.append("Access-Control-Allow-Origin: *\r\n");
+        headers.append("Connection: close\r\n\r\n");
 
-            out.write(headers.toString().getBytes(StandardCharsets.US_ASCII));
-            out.flush();
-            if (!headOnly && status != 416) {
-                InputStream bodyStream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
-                if (bodyStream != null) {
-                    try (InputStream in = new BufferedInputStream(bodyStream, 32768)) {
-                        byte[] buf = new byte[32768];
-                        int n;
-                        boolean firstChunk = true;
-                        while ((n = in.read(buf)) != -1) {
-                            out.write(buf, 0, n);
-                            if (firstChunk) {
-                                out.flush();
-                                firstChunk = false;
-                            }
+        out.write(headers.toString().getBytes(StandardCharsets.US_ASCII));
+        out.flush();
+        if (!headOnly && status != 416) {
+            InputStream bodyStream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            if (bodyStream != null) {
+                try (InputStream in = new BufferedInputStream(bodyStream, 65536)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    boolean firstChunk = true;
+                    while ((n = in.read(buf)) != -1) {
+                        out.write(buf, 0, n);
+                        if (firstChunk) {
+                            out.flush();
+                            firstChunk = false;
                         }
                     }
                 }
             }
-            out.flush();
-        } finally {
-            if (conn != null) conn.disconnect();
         }
+        out.flush();
     }
 
     private static String extractQueryParam(String query, String key) {
@@ -283,16 +376,22 @@ public final class LocalServer {
         return null;
     }
 
-    private void proxyRedgifs(String id, String rangeHeader, boolean headOnly, OutputStream out) throws IOException {
+    private void proxyRedgifs(
+            String id,
+            String rangeHeader,
+            String ifRangeHeader,
+            boolean headOnly,
+            OutputStream out) throws IOException {
         String target = resolveDirectUrl(id);
         if (target == null) {
             sendJsonError(out, 502, "redgifs lookup failed");
             return;
         }
 
+        String effectiveRange = normalizeRangeHeader(rangeHeader, headOnly);
         HttpURLConnection conn = null;
         try {
-            conn = openCdnConnection(target, id, rangeHeader);
+            conn = openCdnConnection(target, id, effectiveRange, ifRangeHeader, headOnly);
             int status = conn.getResponseCode();
 
             if (status == 401 || status == 403 || status == 410) {
@@ -303,7 +402,7 @@ public final class LocalServer {
                     sendJsonError(out, 502, "redgifs lookup failed");
                     return;
                 }
-                conn = openCdnConnection(target, id, rangeHeader);
+                conn = openCdnConnection(target, id, effectiveRange, ifRangeHeader, headOnly);
                 status = conn.getResponseCode();
             }
 
@@ -312,62 +411,32 @@ public final class LocalServer {
                 return;
             }
 
-            String contentType = conn.getHeaderField("Content-Type");
-            if (contentType == null || contentType.isEmpty()) contentType = "video/mp4";
-            String contentLength = conn.getHeaderField("Content-Length");
-            String contentRange = conn.getHeaderField("Content-Range");
-            String acceptRanges = conn.getHeaderField("Accept-Ranges");
-            if (acceptRanges == null || acceptRanges.isEmpty()) acceptRanges = "bytes";
-            String etag = conn.getHeaderField("ETag");
-            String lastModified = conn.getHeaderField("Last-Modified");
-
-            StringBuilder headers = new StringBuilder();
-            headers.append("HTTP/1.1 ").append(status).append(' ').append(reasonPhrase(status)).append("\r\n");
-            headers.append("Content-Type: ").append(contentType).append("\r\n");
-            headers.append("Accept-Ranges: ").append(acceptRanges).append("\r\n");
-            if (contentLength != null) headers.append("Content-Length: ").append(contentLength).append("\r\n");
-            if (contentRange != null) headers.append("Content-Range: ").append(contentRange).append("\r\n");
-            if (etag != null) headers.append("ETag: ").append(etag).append("\r\n");
-            if (lastModified != null) headers.append("Last-Modified: ").append(lastModified).append("\r\n");
-            headers.append("Cache-Control: no-store\r\n");
-            headers.append("Access-Control-Allow-Origin: *\r\n");
-            headers.append("Connection: close\r\n\r\n");
-
-            out.write(headers.toString().getBytes(StandardCharsets.US_ASCII));
-            out.flush();
-            if (!headOnly && status != 416) {
-                InputStream bodyStream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
-                if (bodyStream != null) {
-                    try (InputStream in = new BufferedInputStream(bodyStream, 32768)) {
-                        byte[] buf = new byte[32768];
-                        int n;
-                        boolean firstChunk = true;
-                        while ((n = in.read(buf)) != -1) {
-                            out.write(buf, 0, n);
-                            if (firstChunk) {
-                                out.flush();
-                                firstChunk = false;
-                            }
-                        }
-                    }
-                }
-            }
-            out.flush();
+            streamUpstreamResponse(conn, status, headOnly, out);
         } finally {
             if (conn != null) conn.disconnect();
         }
     }
 
-    private HttpURLConnection openCdnConnection(String target, String id, String rangeHeader) throws IOException {
+    private HttpURLConnection openCdnConnection(
+            String target,
+            String id,
+            String rangeHeader,
+            String ifRangeHeader,
+            boolean headOnly) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(target).openConnection();
+        conn.setRequestMethod(headOnly ? "HEAD" : "GET");
         conn.setInstanceFollowRedirects(true);
-        conn.setConnectTimeout(8000);
-        conn.setReadTimeout(12000);
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(20000);
         conn.setRequestProperty("User-Agent", REDGIFS_UA);
         conn.setRequestProperty("Referer", "https://www.redgifs.com/watch/" + id);
         conn.setRequestProperty("Origin", "https://www.redgifs.com");
+        conn.setRequestProperty("Accept-Encoding", "identity");
         if (rangeHeader != null && !rangeHeader.isEmpty()) {
             conn.setRequestProperty("Range", rangeHeader);
+        }
+        if (ifRangeHeader != null && !ifRangeHeader.isEmpty()) {
+            conn.setRequestProperty("If-Range", ifRangeHeader);
         }
         return conn;
     }
@@ -443,7 +512,8 @@ public final class LocalServer {
                 conn.setRequestProperty("Origin", "https://www.redgifs.com");
                 conn.setRequestProperty("Referer", "https://www.redgifs.com/");
                 conn.setRequestProperty("User-Agent", REDGIFS_UA);
-                if (conn.getResponseCode() < 200 || conn.getResponseCode() >= 300) {
+                int status = conn.getResponseCode();
+                if (status < 200 || status >= 300) {
                     redgifsAuthFailedAt = System.currentTimeMillis();
                     return null;
                 }

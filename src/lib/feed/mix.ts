@@ -11,9 +11,10 @@ export type MixOptions = {
  * must not read as a different video.
  */
 export function mediaKeyOf(post: FlickPost): string {
+  if (post.pornhubKey) return `ph:${post.pornhubKey}`;
   let url = post.video?.url ?? post.image?.url;
   if (!url) return `id:${post.id}`;
-  if (url.includes("/api/twitter/video?")) {
+  if (url.includes("/api/twitter/video?") || url.includes("/api/pornhub/video?")) {
     try {
       const inner = new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("url");
       if (inner) url = inner;

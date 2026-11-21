@@ -29,12 +29,16 @@ function proxifyTwitterPosts(posts: FlickPost[], origin: string): FlickPost[] {
   if (!origin) return posts;
   return posts.map((post) => {
     if (!post.video) return post;
+    const fallbackUrls = post.video.fallbackUrls?.map(
+      (u) => proxifyTwitterVideoUrl(u, origin) ?? u,
+    );
     return {
       ...post,
       video: {
         ...post.video,
         url: proxifyTwitterVideoUrl(post.video.url, origin) ?? post.video.url,
         fallbackUrl: proxifyTwitterVideoUrl(post.video.fallbackUrl, origin),
+        fallbackUrls,
       },
     };
   });

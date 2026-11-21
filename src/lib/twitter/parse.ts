@@ -105,11 +105,15 @@ function extractMediaFromLegacy(legacy: UnknownRecord): {
       const height = asNumber(orig?.height, 720);
       const durationMs = asNumber(info?.duration_millis, 0);
       const posterUrl = asString(videoItem.media_url_https);
-      const fallback = variants.length > 1 ? variants[variants.length - 1] : undefined;
+      const fallbackUrls = variants
+        .slice(1)
+        .map((v) => asString(v.url))
+        .filter(Boolean);
 
       const video: FlickVideo = {
         url: asString(best.url),
-        fallbackUrl: fallback ? asString(fallback.url) : undefined,
+        fallbackUrl: fallbackUrls[0],
+        fallbackUrls: fallbackUrls.length > 0 ? fallbackUrls : undefined,
         width,
         height,
         duration: durationMs > 0 ? durationMs / 1000 : undefined,

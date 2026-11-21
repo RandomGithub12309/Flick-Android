@@ -5,8 +5,16 @@ import type { FlickPost, RedditSession, SubredditSort } from "@/lib/reddit/types
 import type { TwitterSession } from "@/lib/twitter/types";
 
 export type Screen = "home" | "connect" | "loading" | "feed";
-export type FeedPlatform = "mix" | "reddit" | "twitter";
-export type FeedSource = "saved" | "demo" | "subreddit" | "twitter" | "twitter-user" | "mix";
+export type FeedPlatform = "mix" | "reddit" | "twitter" | "pornhub";
+export type FeedSource =
+  | "saved"
+  | "demo"
+  | "subreddit"
+  | "twitter"
+  | "twitter-user"
+  | "pornhub"
+  | "pornhub-saved"
+  | "mix";
 export type MediaFilter = "all" | "video";
 
 export const DEFAULT_SUBREDDITS = [
@@ -27,6 +35,7 @@ type FlickState = {
   subredditSort: SubredditSort;
   session: RedditSession | null;
   twitterSession: TwitterSession | null;
+  savedPornhub: FlickPost[];
   redditClientId: string;
   redditRedirectUri: string;
   customSubreddits: string[];
@@ -45,6 +54,8 @@ type FlickState = {
   setFeedPlatform: (platform: FeedPlatform) => void;
   setSession: (session: RedditSession | null) => void;
   setTwitterSession: (session: TwitterSession | null) => void;
+  savePornhubPost: (post: FlickPost) => void;
+  unsavePornhubPost: (idOrKey: string) => void;
   setRedditClientId: (clientId: string) => void;
   setRedditRedirectUri: (uri: string) => void;
   setCustomSubreddits: (subs: string[]) => void;
@@ -60,6 +71,7 @@ type FlickState = {
     source: FeedSource,
     subreddit?: string | null,
     twitterUser?: string | null,
+    startIndex?: number,
   ) => void;
   appendPosts: (more: FlickPost[]) => void;
   removePost: (id: string) => void;
@@ -69,6 +81,7 @@ type FlickState = {
   prev: () => void;
   reroll: () => void;
   toggleMuted: () => void;
+  rebindLocalProxyOrigin: (origin: string) => void;
   signOut: () => void;
   signOutTwitter: () => void;
 };
@@ -95,7 +108,16 @@ function readCachedDeck(): CachedDeck {
       typeof parsed.index === "number" && posts.length > 0
         ? Math.min(Math.max(0, parsed.index), posts.length - 1)
         : 0;
-    const validSources: FeedSource[] = ["saved", "demo", "subreddit", "twitter", "twitter-user", "mix"];
+    const validSources: FeedSource[] = [
+      "saved",
+      "demo",
+      "subreddit",
+      "twitter",
+      "twitter-user",
+      "pornhub",
+      "pornhub-saved",
+      "mix",
+    ];
     const source: FeedSource =
       parsed.source && validSources.includes(parsed.source) ? parsed.source : "demo";
     return {
@@ -154,6 +176,7 @@ export const useFlick = create<FlickState>()(
       subredditSort: "hot",
       session: null,
       twitterSession: null,
+      savedPornhub: [],
       posts: initialDeck.posts,
       index: initialDeck.index,
       muted: false,
@@ -166,6 +189,31 @@ export const useFlick = create<FlickState>()(
       setFeedPlatform: (feedPlatform) => set({ feedPlatform }),
       setSession: (session) => set({ session }),
       setTwitterSession: (twitterSession) => set({ twitterSession }),
+      savePornhubPost: (post) => {
+        const key = post.pornhubKey || post.id.replace(/^ph_/, "");
+        if (!key) return;
+        const clean: FlickPost = {
+          ...post,
+          id: `ph_${key}`,
+          name: `ph_${key}`,
+          platform: "pornhub",
+          pornhubKey: key,
+          kind: "video",
+          // Strip ephemeral signed CDN URLs so playback always resolves fresh via pornhubKey.
+          video: undefined,
+        };
+        const current = get().savedPornhub;
+        if (current.some((p) => p.pornhubKey === key || p.id === clean.id)) return;
+        set({ savedPornhub: [clean, ...current] });
+      },
+      unsavePornhubPost: (idOrKey) => {
+        const cleanKey = idOrKey.replace(/^ph_/, "");
+        set({
+          savedPornhub: get().savedPornhub.filter(
+            (p) => p.id !== idOrKey && p.pornhubKey !== cleanKey && p.id !== `ph_${cleanKey}`,
+          ),
+        });
+      },
       setRedditClientId: (clientId) => set({ redditClientId: clientId.trim() }),
       setRedditRedirectUri: (uri) => set({ redditRedirectUri: uri.trim() }),
       setCustomSubreddits: (subs) =>
@@ -180,14 +228,18 @@ export const useFlick = create<FlickState>()(
       setNotice: (notice) => set({ notice }),
       setLoading: (label, count = 0) =>
         set({ screen: "loading", loadingLabel: label, loadingCount: count, error: null }),
-      setPosts: (posts, source, subreddit = null, twitterUser = null) => {
-        const deck = source === "subreddit" || source === "twitter-user" ? posts : orderDeck(posts);
+      setPosts: (posts, source, subreddit = null, twitterUser = null, startIndex = 0) => {
+        const keepOrder =
+          source === "subreddit" || source === "twitter-user" || source === "pornhub";
+        const deck = keepOrder ? posts : orderDeck(posts);
+        const clampedIndex =
+          deck.length > 0 ? Math.min(Math.max(0, startIndex), deck.length - 1) : 0;
         set({
           posts: deck,
           source,
           activeSubreddit: source === "subreddit" ? subreddit : null,
           activeTwitterUser: source === "twitter-user" ? twitterUser : null,
-          index: 0,
+          index: clampedIndex,
           screen: deck.length > 0 ? "feed" : "home",
           error:
             deck.length === 0
@@ -260,6 +312,43 @@ export const useFlick = create<FlickState>()(
         set({ index: next });
       },
       toggleMuted: () => set({ muted: !get().muted }),
+      rebindLocalProxyOrigin: (origin) => {
+        const cleanOrigin = origin.replace(/\/+$/, "");
+        if (!cleanOrigin) return;
+        const rewrite = (url: string | undefined): string | undefined => {
+          if (!url) return url;
+          return url.replace(/^http:\/\/127\.0\.0\.1:\d+(?=\/api\/)/, cleanOrigin);
+        };
+        const { posts } = get();
+        let changed = false;
+        const nextPosts = posts.map((post) => {
+          if (!post.video) return post;
+          const nextUrl = rewrite(post.video.url) ?? post.video.url;
+          const nextFallback = rewrite(post.video.fallbackUrl);
+          const nextFallbacks = post.video.fallbackUrls?.map((u) => rewrite(u) ?? u);
+          const fallbacksChanged =
+            Boolean(nextFallbacks) &&
+            nextFallbacks!.some((u, i) => u !== post.video?.fallbackUrls?.[i]);
+          if (
+            nextUrl === post.video.url &&
+            nextFallback === post.video.fallbackUrl &&
+            !fallbacksChanged
+          ) {
+            return post;
+          }
+          changed = true;
+          return {
+            ...post,
+            video: {
+              ...post.video,
+              url: nextUrl,
+              fallbackUrl: nextFallback,
+              fallbackUrls: nextFallbacks,
+            },
+          };
+        });
+        if (changed) set({ posts: nextPosts });
+      },
       signOut: () =>
         set({
           session: null,
@@ -292,6 +381,7 @@ export const useFlick = create<FlickState>()(
         feedPlatform: state.feedPlatform,
         session: state.session,
         twitterSession: state.twitterSession,
+        savedPornhub: state.savedPornhub,
         muted: state.muted,
         autoAdvance: state.autoAdvance,
         subredditSort: state.subredditSort,

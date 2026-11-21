@@ -8,12 +8,14 @@ import { useFlick } from "@/store/flick";
 export function SourceChips() {
   const session = useFlick((s) => s.session);
   const twitterSession = useFlick((s) => s.twitterSession);
+  const savedPornhubCount = useFlick((s) => s.savedPornhub.length);
   const setScreen = useFlick((s) => s.setScreen);
 
   const redditLabel = session ? `Reddit · u/${session.username}` : "Reddit · sample mix";
   const twitterLabel = twitterSession
     ? `X · @${twitterSession.username || "connected"}`
     : "X · not connected";
+  const phLabel = `PH · ${savedPornhubCount} saved`;
 
   return (
     <button
@@ -33,6 +35,11 @@ export function SourceChips() {
         >
           {twitterLabel}
         </span>
+        {savedPornhubCount > 0 ? (
+          <span className="max-w-full truncate rounded-full bg-fg/12 px-2 py-0.5 text-xs font-medium text-fg">
+            {phLabel}
+          </span>
+        ) : null}
       </span>
       <ArrowRight className="size-4 shrink-0 text-subtle" />
     </button>

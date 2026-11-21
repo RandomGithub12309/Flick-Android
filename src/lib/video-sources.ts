@@ -18,8 +18,12 @@ export function audioCandidatesFor(
  * The files a post can be played from, best first: the real clip, then the
  * host's own copy for networks where the primary CDN is unreachable.
  */
-export function videoSources(video: Pick<FlickVideo, "fallbackUrl" | "url">): string[] {
-  const list = [video.url, video.fallbackUrl].filter((url): url is string => Boolean(url));
+export function videoSources(
+  video: Pick<FlickVideo, "fallbackUrl" | "fallbackUrls" | "url">,
+): string[] {
+  const list = [video.url, ...(video.fallbackUrls ?? []), video.fallbackUrl].filter(
+    (url): url is string => Boolean(url),
+  );
   return [...new Set(list)];
 }
 

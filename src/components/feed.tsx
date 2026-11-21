@@ -28,6 +28,8 @@ function deckLabel(
   if (source === "mix") return "Mix";
   if (source === "twitter") return "X Bookmarks";
   if (source === "twitter-user" && twitterUser) return `@${twitterUser}`;
+  if (source === "pornhub") return "Pornhub";
+  if (source === "pornhub-saved") return "Saved PH";
   if (source === "saved") return "Saved";
   if (source === "subreddit" && subreddit) return `r/${subreddit}`;
   return "Shuffle";
@@ -43,6 +45,10 @@ export function Feed() {
   const activeTwitterUser = useFlick((s) => s.activeTwitterUser);
   const session = useFlick((s) => s.session);
   const twitterSession = useFlick((s) => s.twitterSession);
+  const savedPornhub = useFlick((s) => s.savedPornhub);
+  const savePornhubPost = useFlick((s) => s.savePornhubPost);
+  const unsavePornhubPost = useFlick((s) => s.unsavePornhubPost);
+  const setPosts = useFlick((s) => s.setPosts);
   const notice = useFlick((s) => s.notice);
   const setNotice = useFlick((s) => s.setNotice);
   const setAutoAdvance = useFlick((s) => s.setAutoAdvance);
@@ -293,7 +299,14 @@ export function Feed() {
     })
     .filter((v): v is { offset: number; item: typeof post } => v !== null);
 
-  const isSavedInFeed = Boolean(savedIds[post.id]);
+  const isSavedPh =
+    post.platform === "pornhub" &&
+    savedPornhub.some(
+      (p) =>
+        p.id === post.id ||
+        (Boolean(post.pornhubKey) && p.pornhubKey === post.pornhubKey),
+    );
+  const isSavedInFeed = post.platform === "pornhub" ? isSavedPh : Boolean(savedIds[post.id]);
 
   return (
     <section
@@ -321,7 +334,9 @@ export function Feed() {
             onOpenSubreddit={(sub) => openSubreddit(sub)}
             onOpenTwitterUser={(user) => openTwitterUser(user)}
             onUnplayable={
-              offset === 0 && !animating && (item.kind === "video" || Boolean(item.redgifsId))
+              offset === 0 &&
+              !animating &&
+              (item.kind === "video" || Boolean(item.redgifsId) || Boolean(item.pornhubKey))
                 ? () => skipUnplayable(item.id)
                 : undefined
             }
@@ -341,16 +356,14 @@ export function Feed() {
               </p>
             </div>
             <div className="pointer-events-auto mt-3 flex items-center gap-1.5">
-              {session ? (
-                <button
-                  type="button"
-                  aria-label="Search subreddits"
-                  className="flex size-9 items-center justify-center rounded-full bg-bg/45 text-fg shadow-[var(--shadow-border)] backdrop-blur-sm"
-                  onClick={() => setSearchOpen(true)}
-                >
-                  <Search className="size-4" />
-                </button>
-              ) : null}
+              <button
+                type="button"
+                aria-label="Search Reddit or Pornhub"
+                className="flex size-9 items-center justify-center rounded-full bg-bg/45 text-fg shadow-[var(--shadow-border)] backdrop-blur-sm"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Search className="size-4" />
+              </button>
               <button
                 type="button"
                 className="rounded-full bg-bg/45 px-2.5 py-1.5 text-xs font-medium text-fg shadow-[var(--shadow-border)] backdrop-blur-sm"
@@ -410,7 +423,9 @@ export function Feed() {
                       undoTimer.current = null;
                     }
                     insertPostAt(target.post, target.atIndex);
-                    if (target.post.platform === "twitter") {
+                    if (target.post.platform === "pornhub") {
+                      savePornhubPost(target.post);
+                    } else if (target.post.platform === "twitter") {
                       if (twitterSession) {
                         void saveTwitterPost(twitterSession, target.post.id).catch(() => {
                           setSkipNotice("Could not re-bookmark on X");
@@ -432,79 +447,109 @@ export function Feed() {
           <ActionRail
             muted={muted}
             permalink={post.permalink}
-            sourceLabel={post.platform === "twitter" ? "X" : "Reddit"}
+            sourceLabel={
+              post.platform === "pornhub" ? "PH" : post.platform === "twitter" ? "X" : "Reddit"
+            }
             saved={isSavedInFeed}
             onShuffle={reroll}
             onToggleMute={toggleMuted}
             onComments={() => setCommentsOpen(true)}
             onShare={() => void handleShare()}
             onSave={
-              post.platform === "twitter"
-                ? source === "twitter-user" && twitterSession
+              post.platform === "pornhub"
+                ? source === "pornhub"
                   ? () => {
                       const target = post;
-                      const nextSaved = !isSavedInFeed;
-                      setSavedIds((prevIds) => ({ ...prevIds, [target.id]: nextSaved }));
-                      setSkipNotice(nextSaved ? "Bookmarked on X" : "Removed X bookmark");
-                      const op = nextSaved
-                        ? saveTwitterPost(twitterSession, target.id)
-                        : unsaveTwitterPost(twitterSession, target.id);
-                      void op.catch(() => {
-                        setSavedIds((prevIds) => ({ ...prevIds, [target.id]: !nextSaved }));
-                        setSkipNotice("Could not update X bookmark");
-                      });
+                      if (isSavedPh) {
+                        unsavePornhubPost(target.pornhubKey || target.id);
+                        setSkipNotice("Removed from Saved");
+                      } else {
+                        savePornhubPost(target);
+                        setSkipNotice("Saved to Mix");
+                      }
                     }
                   : undefined
-                : source !== "saved" && source !== "mix" && session
-                  ? () => {
-                      const target = post;
-                      const nextSaved = !isSavedInFeed;
-                      setSavedIds((prevIds) => ({ ...prevIds, [target.id]: nextSaved }));
-                      setSkipNotice(nextSaved ? "Saved to Reddit" : "Removed from Saved");
-                      const op = nextSaved
-                        ? saveRedditPost(session, target.name)
-                        : unsaveRedditPost(session, target.name);
-                      void op.catch(() => {
-                        setSavedIds((prevIds) => ({ ...prevIds, [target.id]: !nextSaved }));
-                        setSkipNotice("Could not update Reddit save");
-                      });
-                    }
-                  : undefined
+                : post.platform === "twitter"
+                  ? source === "twitter-user" && twitterSession
+                    ? () => {
+                        const target = post;
+                        const nextSaved = !isSavedInFeed;
+                        setSavedIds((prevIds) => ({ ...prevIds, [target.id]: nextSaved }));
+                        setSkipNotice(nextSaved ? "Bookmarked on X" : "Removed X bookmark");
+                        const op = nextSaved
+                          ? saveTwitterPost(twitterSession, target.id)
+                          : unsaveTwitterPost(twitterSession, target.id);
+                        void op.catch(() => {
+                          setSavedIds((prevIds) => ({ ...prevIds, [target.id]: !nextSaved }));
+                          setSkipNotice("Could not update X bookmark");
+                        });
+                      }
+                    : undefined
+                  : source !== "saved" && source !== "mix" && session
+                    ? () => {
+                        const target = post;
+                        const nextSaved = !isSavedInFeed;
+                        setSavedIds((prevIds) => ({ ...prevIds, [target.id]: nextSaved }));
+                        setSkipNotice(nextSaved ? "Saved to Reddit" : "Removed from Saved");
+                        const op = nextSaved
+                          ? saveRedditPost(session, target.name)
+                          : unsaveRedditPost(session, target.name);
+                        void op.catch(() => {
+                          setSavedIds((prevIds) => ({ ...prevIds, [target.id]: !nextSaved }));
+                          setSkipNotice("Could not update Reddit save");
+                        });
+                      }
+                    : undefined
             }
             onUnsave={
-              post.platform === "twitter"
-                ? (source === "twitter" || source === "mix") && twitterSession
+              post.platform === "pornhub"
+                ? source === "pornhub-saved" || source === "mix"
                   ? () => {
                       const target = post;
                       const atIndex = index;
                       removePost(target.id);
+                      unsavePornhubPost(target.pornhubKey || target.id);
                       setUndoUnsave({ post: target, atIndex });
                       if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
                       undoTimer.current = window.setTimeout(() => {
                         undoTimer.current = null;
                         setUndoUnsave(null);
                       }, 4500);
-                      void unsaveTwitterPost(twitterSession, target.id).catch(() => {
-                        setSkipNotice("Could not remove X bookmark");
-                      });
                     }
                   : undefined
-                : (source === "saved" || source === "mix") && session
-                  ? () => {
-                      const target = post;
-                      const atIndex = index;
-                      removePost(target.id);
-                      setUndoUnsave({ post: target, atIndex });
-                      if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
-                      undoTimer.current = window.setTimeout(() => {
-                        undoTimer.current = null;
-                        setUndoUnsave(null);
-                      }, 4500);
-                      void unsaveRedditPost(session, target.name).catch(() => {
-                        setSkipNotice("Could not unsave on Reddit");
-                      });
-                    }
-                  : undefined
+                : post.platform === "twitter"
+                  ? (source === "twitter" || source === "mix") && twitterSession
+                    ? () => {
+                        const target = post;
+                        const atIndex = index;
+                        removePost(target.id);
+                        setUndoUnsave({ post: target, atIndex });
+                        if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+                        undoTimer.current = window.setTimeout(() => {
+                          undoTimer.current = null;
+                          setUndoUnsave(null);
+                        }, 4500);
+                        void unsaveTwitterPost(twitterSession, target.id).catch(() => {
+                          setSkipNotice("Could not remove X bookmark");
+                        });
+                      }
+                    : undefined
+                  : (source === "saved" || source === "mix") && session
+                    ? () => {
+                        const target = post;
+                        const atIndex = index;
+                        removePost(target.id);
+                        setUndoUnsave({ post: target, atIndex });
+                        if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+                        undoTimer.current = window.setTimeout(() => {
+                          undoTimer.current = null;
+                          setUndoUnsave(null);
+                        }, 4500);
+                        void unsaveRedditPost(session, target.name).catch(() => {
+                          setSkipNotice("Could not unsave on Reddit");
+                        });
+                      }
+                    : undefined
             }
             onSignOut={source === "saved" ? signOut : undefined}
           />
@@ -523,7 +568,7 @@ export function Feed() {
 
       {searchOpen ? (
         <div
-          className="fixed inset-0 z-50 flex flex-col bg-bg/92 px-5 pt-safe backdrop-blur-md"
+          className="fixed inset-0 z-50 flex flex-col bg-bg/92 px-4 pt-safe backdrop-blur-md"
           onPointerDown={(e) => e.stopPropagation()}
           onPointerMove={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
@@ -531,7 +576,7 @@ export function Feed() {
         >
           <div className="mx-auto w-full max-w-md pt-4 space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-fg">Browse subreddits</h2>
+              <h2 className="text-base font-semibold text-fg">Search</h2>
               <button
                 type="button"
                 aria-label="Close search"
@@ -542,8 +587,12 @@ export function Feed() {
               </button>
             </div>
             <SubredditSearch
+              initialEngine={source === "pornhub" || source === "pornhub-saved" ? "pornhub" : "reddit"}
               onSelectSubreddit={(sub, sort) => openSubreddit(sub, sort)}
-              placeholder="Search any subreddit…"
+              onPlayPornhub={(phPosts, startIndex) => {
+                setSearchOpen(false);
+                setPosts(phPosts, "pornhub", null, null, startIndex);
+              }}
             />
           </div>
         </div>

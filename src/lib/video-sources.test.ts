@@ -29,6 +29,25 @@ describe("video sources are tried best first", () => {
 
     assert.deepEqual(sources, ["https://v.redd.it/x/DASH_480.mp4"]);
   });
+
+  it("walks ordered fallbackUrls from next-best down to lowest without duplicates", () => {
+    const sources = videoSources({
+      url: "https://video.twimg.com/1080p.mp4",
+      fallbackUrl: "https://video.twimg.com/720p.mp4",
+      fallbackUrls: [
+        "https://video.twimg.com/720p.mp4",
+        "https://video.twimg.com/480p.mp4",
+        "https://video.twimg.com/270p.mp4",
+      ],
+    });
+
+    assert.deepEqual(sources, [
+      "https://video.twimg.com/1080p.mp4",
+      "https://video.twimg.com/720p.mp4",
+      "https://video.twimg.com/480p.mp4",
+      "https://video.twimg.com/270p.mp4",
+    ]);
+  });
 });
 
 describe("audio follows the source that is on screen", () => {

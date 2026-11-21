@@ -39,7 +39,9 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    void ensureLocalServer();
+    void ensureLocalServer().then((origin) => {
+      if (origin) useFlick.getState().rebindLocalProxyOrigin(origin);
+    });
     const stopOauth = registerNativeOauthListener();
     if (!isNative()) return stopOauth;
 

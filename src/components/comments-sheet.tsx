@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, MessageCircle, X } from "lucide-react";
+import { fetchPornhubComments } from "@/lib/pornhub/pornhub.native";
 import { loadPostComments } from "@/lib/reddit/loader";
 import { loadTwitterComments } from "@/lib/twitter/loader";
 import type { FlickPost, RedditComment } from "@/lib/reddit/types";
@@ -17,15 +18,18 @@ export function CommentsSheet({ post, onClose }: Props) {
   const [comments, setComments] = useState<RedditComment[]>([]);
   const [loading, setLoading] = useState(true);
   const isTwitter = post.platform === "twitter";
+  const isPornhub = post.platform === "pornhub";
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const loader = isTwitter
-      ? twitterSession
-        ? loadTwitterComments(twitterSession, post.id)
-        : Promise.resolve([])
-      : loadPostComments(post.subreddit, post.id, session);
+    const loader = isPornhub
+      ? fetchPornhubComments(post.pornhubKey || post.id.replace(/^ph_/, ""))
+      : isTwitter
+        ? twitterSession
+          ? loadTwitterComments(twitterSession, post.id)
+          : Promise.resolve([])
+        : loadPostComments(post.subreddit, post.id, session);
     void loader
       .then((rows) => {
         if (!cancelled) setComments(rows);
@@ -39,7 +43,7 @@ export function CommentsSheet({ post, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [isTwitter, post.id, post.subreddit, session, twitterSession]);
+  }, [isPornhub, isTwitter, post.id, post.pornhubKey, post.subreddit, session, twitterSession]);
 
   return (
     <div
@@ -80,7 +84,7 @@ export function CommentsSheet({ post, onClose }: Props) {
               <div key={c.id} className="space-y-1 border-b border-fg/8 pb-3 last:border-none">
                 <div className="flex items-center justify-between text-xs text-muted">
                   <span className="font-medium text-fg/90">
-                    {isTwitter ? `@${c.author}` : `u/${c.author}`}
+                    {isPornhub ? c.author : isTwitter ? `@${c.author}` : `u/${c.author}`}
                   </span>
                   <span className="tabular-nums">{formatScore(c.score)}</span>
                 </div>
